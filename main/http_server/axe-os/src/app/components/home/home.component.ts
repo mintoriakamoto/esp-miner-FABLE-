@@ -66,6 +66,7 @@ const WIDGET_DEFAULTS: WidgetDef[] = [
   { id: 'pool',        label: 'Pool',                x: 0, y: 12,  w: 4,  h: 6,  minW: 2, minH: 3 },
   { id: 'blockheader', label: 'Block Header',        x: 4, y: 12,  w: 4,  h: 6,  minW: 2, minH: 3 },
   { id: 'registers',   label: 'Hashrate Registers',  x: 8, y: 12,  w: 4,  h: 6,  minW: 2, minH: 3 },
+  { id: 'system',      label: 'System Health',       x: 0, y: 18,  w: 4,  h: 6,  minW: 2, minH: 3 },
 ];
 
 @Component({
@@ -376,7 +377,7 @@ export class HomeComponent implements OnInit, OnDestroy {
     }, this.gridStackEl!.nativeElement);
 
     const savedLayout = this.storageService.getObject(DASHBOARD_LAYOUT_KEY);
-    this.grid.load(savedLayout ?? this.getInitialLayout());
+    this.grid.load(this.mergeNewWidgets(savedLayout) ?? this.getInitialLayout());
 
     setTimeout(() => this.chart?.chart?.resize(), 100);
 
@@ -398,6 +399,23 @@ export class HomeComponent implements OnInit, OnDestroy {
   private saveLayout(): void {
     const layout = this.grid.save(false);
     this.storageService.setObject(DASHBOARD_LAYOUT_KEY, layout as object);
+  }
+
+  // A layout saved by an older firmware version doesn't know about widgets
+  // added since; grid.load() would silently drop them. Append unknown,
+  // non-hidden widgets below the saved layout instead.
+  private mergeNewWidgets(savedLayout: any): any {
+    if (!Array.isArray(savedLayout)) {
+      return null;
+    }
+    const knownIds = new Set(savedLayout.map(item => item?.id));
+    const maxY = savedLayout.reduce((max, item) => Math.max(max, (item?.y ?? 0) + (item?.h ?? 0)), 0);
+    WIDGET_DEFAULTS.forEach(def => {
+      if (!knownIds.has(def.id) && !this.hiddenWidgets.has(def.id)) {
+        savedLayout.push({ ...def, y: maxY });
+      }
+    });
+    return savedLayout;
   }
 
   public toggleEditMode(): void {
@@ -430,6 +448,18 @@ export class HomeComponent implements OnInit, OnDestroy {
       }
       return w;
     });
+  }
+
+  public getWifiQualityPercent(rssi: number): number {
+    // Map the usable RSSI range (-100..-50 dBm) onto 0..100%
+    return Math.max(0, Math.min(100, 2 * (rssi + 100)));
+  }
+
+  public getWifiQualityLabel(rssi: number): string {
+    if (rssi >= -50) return 'Excellent';
+    if (rssi >= -60) return 'Good';
+    if (rssi >= -70) return 'Fair';
+    return 'Weak';
   }
 
   public isWidgetVisible(id: string): boolean {

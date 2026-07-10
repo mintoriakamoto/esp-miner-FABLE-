@@ -39,11 +39,12 @@ export class LiveDataService {
           switchMap(() => {
             // Only poll if not connected OR if backgrounded (to keep data fresh)
             if (this.connectedSubject.value && state === 'visible') return EMPTY;
-            return this.systemService.getInfo();
+            // Catch per request: a single failed poll must not tear down the
+            // polling stream for the rest of the session
+            return this.systemService.getInfo().pipe(catchError(() => EMPTY));
           })
         );
-      }),
-      catchError(() => EMPTY)
+      })
     );
 
     const updates$ = merge(
@@ -58,6 +59,9 @@ export class LiveDataService {
     );
 
     const initialInfo$ = this.systemService.getInfo().pipe(
+      // The first paint depends on this call; retry a few times before
+      // leaving it to the websocket / fallback polling
+      retry({ count: 3, delay: 2000 }),
       catchError(err => {
         console.error('Initial info fetch failed', err);
         return EMPTY;
@@ -105,7 +109,18 @@ export class LiveDataService {
           this.updates$.next(msg.data);
         }
       }),
-      retry({ delay: 5000 }),
+      retry({
+        // A long-lived connection that drops should reconnect quickly again,
+        // so reset the backoff after each successful connection
+        resetOnSuccess: true,
+        delay: (_error, retryCount) => {
+          this.connectedSubject.next(false);
+          // Exponential backoff with jitter, capped at 30s, so a rebooting
+          // device isn't hammered by a fixed-rate retry loop
+          const base = Math.min(30000, 2500 * Math.pow(2, Math.min(retryCount - 1, 4)));
+          return timer(base * (0.75 + Math.random() * 0.5));
+        }
+      }),
       share()
     );
   }

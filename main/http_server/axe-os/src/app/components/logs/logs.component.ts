@@ -1,6 +1,6 @@
 import { AfterViewChecked, Component, Input, OnInit, ElementRef, OnDestroy, ViewChild, HostListener } from '@angular/core';
 import { FormBuilder, FormGroup, Validators } from '@angular/forms';
-import { Subscription } from 'rxjs';
+import { Subscription, retry, timer } from 'rxjs';
 import { ToastrService } from 'ngx-toastr';
 import { WebsocketService } from 'src/app/services/web-socket.service';
 import { SystemApiService } from 'src/app/services/system.service';
@@ -50,7 +50,21 @@ export class LogsComponent implements OnInit, OnDestroy, AfterViewChecked {
   private logBuffer: string = '';
 
   private subscribeLogs() {
-    this.websocketSubscription = this.websocketService.ws$.subscribe({
+    let reconnectToastShown = false;
+    this.websocketSubscription = this.websocketService.ws$.pipe(
+      // Auto-reconnect: without this the log stream is dead after the first
+      // websocket error until the user leaves and re-enters the page
+      retry({
+        delay: () => {
+          if (!reconnectToastShown) {
+            reconnectToastShown = true;
+            this.toastr.warning("Log stream disconnected, reconnecting...");
+          }
+          return timer(5000);
+        },
+        resetOnSuccess: true
+      })
+    ).subscribe({
         next: (val) => {
           this.logBuffer += val;
 

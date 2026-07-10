@@ -55,12 +55,20 @@ void *queue_dequeue_timeout(work_queue *queue, int timeout_ms)
 {
     pthread_mutex_lock(&queue->lock);
 
-    while (queue->count == 0)
+    // A non-positive timeout would produce an invalid (in the past or with a
+    // negative tv_nsec) timespec below; treat it as a non-blocking poll.
+    if (queue->count == 0 && timeout_ms <= 0) {
+        pthread_mutex_unlock(&queue->lock);
+        return NULL;
+    }
+
+    if (queue->count == 0)
     {
+        // Compute the absolute deadline once, so spurious wakeups don't
+        // extend the total wait.
         struct timespec timeout_time;
         clock_gettime(CLOCK_REALTIME, &timeout_time);
 
-        // Add timeout_ms milliseconds to current time
         timeout_time.tv_sec += timeout_ms / 1000;
         timeout_time.tv_nsec += (timeout_ms % 1000) * 1000000;
 
@@ -70,11 +78,15 @@ void *queue_dequeue_timeout(work_queue *queue, int timeout_ms)
             timeout_time.tv_nsec -= 1000000000;
         }
 
-        int result = pthread_cond_timedwait(&queue->not_empty, &queue->lock, &timeout_time);
-        if (result == ETIMEDOUT) {
-            // Timeout occurred, return NULL
-            pthread_mutex_unlock(&queue->lock);
-            return NULL;
+        while (queue->count == 0)
+        {
+            int result = pthread_cond_timedwait(&queue->not_empty, &queue->lock, &timeout_time);
+            if (result != 0) {
+                // ETIMEDOUT, or any error (e.g. EINVAL): give up instead of
+                // busy-spinning on a wait that can never succeed.
+                pthread_mutex_unlock(&queue->lock);
+                return NULL;
+            }
         }
     }
 
