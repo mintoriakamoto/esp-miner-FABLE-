@@ -143,9 +143,16 @@ static void _set_chip_address(uint8_t chipAddr)
     _send_BM1397((TYPE_CMD | GROUP_SINGLE | CMD_SETADDRESS), read_address, 2, BM1397_SERIALTX_DEBUG);
 }
 
-void BM1397_set_version_mask(uint32_t version_mask) 
+void BM1397_set_version_mask(uint32_t version_mask)
 {
     // placeholder
+}
+
+void BM1397_set_job_difficulty_mask(uint32_t difficulty)
+{
+    uint8_t difficulty_mask[6];
+    get_difficulty_mask(difficulty, difficulty_mask);
+    _send_BM1397((TYPE_CMD | GROUP_ALL | CMD_WRITE), difficulty_mask, 6, BM1397_SERIALTX_DEBUG);
 }
 
 float BM1397_send_hash_frequency(float target_freq)
@@ -214,12 +221,8 @@ uint8_t BM1397_init(void * pvParameters)
     unsigned char init4[9] = {0x00, CORE_REGISTER_CONTROL, 0x80, 0x00, 0x80, 0x74}; // init4 - init_4_?
     _send_BM1397((TYPE_CMD | GROUP_ALL | CMD_WRITE), init4, 6, BM1397_SERIALTX_DEBUG);
 
-    uint16_t difficulty = GLOBAL_STATE->DEVICE_CONFIG.family.asic.difficulty;
-
     //set difficulty mask
-    uint8_t difficulty_mask[6];
-    get_difficulty_mask(difficulty, difficulty_mask);
-    _send_BM1397((TYPE_CMD | GROUP_ALL | CMD_WRITE), difficulty_mask, 6, BM1397_SERIALTX_DEBUG);
+    BM1397_set_job_difficulty_mask(GLOBAL_STATE->DEVICE_CONFIG.family.asic.difficulty);
 
     unsigned char init5[9] = {0x00, PLL3_PARAMETER, 0xC0, 0x70, 0x01, 0x11}; // init5 - pll3_parameter
     _send_BM1397((TYPE_CMD | GROUP_ALL | CMD_WRITE), init5, 6, BM1397_SERIALTX_DEBUG);

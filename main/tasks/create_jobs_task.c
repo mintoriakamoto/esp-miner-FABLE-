@@ -107,6 +107,27 @@ void create_jobs_task(void *pvParameters)
             timeout_ms = 0;
         }
 
+        // Apply difficulty and version-mask changes on every iteration, not just
+        // when a new notify is dequeued. Pools send set_difficulty/set_version_mask
+        // between notifies; extranonce_2-rolled jobs generated in that window must
+        // already use the new values, or shares get rejected as too-low-difficulty.
+        if (GLOBAL_STATE->new_set_mining_difficulty_msg) {
+            ESP_LOGI(TAG, "New pool difficulty %.2f", GLOBAL_STATE->pool_difficulty);
+            difficulty = GLOBAL_STATE->pool_difficulty;
+            GLOBAL_STATE->new_set_mining_difficulty_msg = false;
+            if (GLOBAL_STATE->ASIC_initalized) {
+                // Keep the hardware ticket mask at or below the pool difficulty
+                // so the chips never withhold submittable shares
+                ASIC_set_job_difficulty_mask(GLOBAL_STATE, difficulty);
+            }
+        }
+
+        if (GLOBAL_STATE->new_stratum_version_rolling_msg && GLOBAL_STATE->ASIC_initalized) {
+            ESP_LOGI(TAG, "Set chip version rolls %i", (int)(GLOBAL_STATE->version_mask >> 13));
+            ASIC_set_version_mask(GLOBAL_STATE, GLOBAL_STATE->version_mask);
+            GLOBAL_STATE->new_stratum_version_rolling_msg = false;
+        }
+
         if (new_work != NULL) {
             active_protocol = GLOBAL_STATE->stratum_protocol;
 
@@ -140,18 +161,6 @@ void create_jobs_task(void *pvParameters)
             }
 
             current_work = new_work;
-
-            if (GLOBAL_STATE->new_set_mining_difficulty_msg) {
-                ESP_LOGI(TAG, "New pool difficulty %.2f", GLOBAL_STATE->pool_difficulty);
-                difficulty = GLOBAL_STATE->pool_difficulty;
-                GLOBAL_STATE->new_set_mining_difficulty_msg = false;
-            }
-
-            if (GLOBAL_STATE->new_stratum_version_rolling_msg && GLOBAL_STATE->ASIC_initalized) {
-                ESP_LOGI(TAG, "Set chip version rolls %i", (int)(GLOBAL_STATE->version_mask >> 13));
-                ASIC_set_version_mask(GLOBAL_STATE, GLOBAL_STATE->version_mask);
-                GLOBAL_STATE->new_stratum_version_rolling_msg = false;
-            }
 
             extranonce_2 = 0;
 
