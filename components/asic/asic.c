@@ -13,9 +13,14 @@
 
 static const char *TAG = "asic";
 
+// Ticket mask currently programmed into the chips. Chip init programs the
+// chip default, so ASIC_init resets this to match.
+static uint32_t current_ticket_mask = 0;
+
 uint8_t ASIC_init(GlobalState * GLOBAL_STATE)
 {
     ESP_LOGI(TAG, "Initializing %dx %s", GLOBAL_STATE->DEVICE_CONFIG.family.asic_count, GLOBAL_STATE->DEVICE_CONFIG.family.asic.name);
+    current_ticket_mask = GLOBAL_STATE->DEVICE_CONFIG.family.asic.difficulty;
     switch (GLOBAL_STATE->DEVICE_CONFIG.family.asic.id) {
         case BM1397:
             return BM1397_init(GLOBAL_STATE);
@@ -102,6 +107,52 @@ void ASIC_set_version_mask(GlobalState * GLOBAL_STATE, uint32_t mask)
             ESP_LOGE(TAG, "Unknown ASIC id %d — cannot set version mask", GLOBAL_STATE->DEVICE_CONFIG.family.asic.id);
             break;
     }
+}
+
+// Keep the ASIC's ticket mask at or below the pool difficulty. The mask is a
+// hardware filter: results below it are never reported over UART, so a mask
+// above the pool difficulty silently discards valid shares (the pool then
+// sees only a fraction of the real hashrate). The chip default is the upper
+// bound - raising the mask further would only starve the UI's share stats.
+void ASIC_set_job_difficulty_mask(GlobalState * GLOBAL_STATE, double pool_difficulty)
+{
+    uint32_t asic_default = GLOBAL_STATE->DEVICE_CONFIG.family.asic.difficulty;
+    uint32_t target = asic_default;
+    if (pool_difficulty >= 1.0 && pool_difficulty < (double) asic_default) {
+        target = (uint32_t) pool_difficulty;
+    }
+
+    // get_difficulty_mask() rounds down to a power of two on the chip side;
+    // do the same here so the change detection matches what is actually sent
+    uint32_t pow2_target = 1;
+    while ((pow2_target << 1) <= target) {
+        pow2_target <<= 1;
+    }
+
+    if (pow2_target == current_ticket_mask) {
+        return;
+    }
+
+    ESP_LOGI(TAG, "Setting ASIC ticket mask to %lu (pool difficulty %.2f)", (unsigned long) pow2_target, pool_difficulty);
+
+    switch (GLOBAL_STATE->DEVICE_CONFIG.family.asic.id) {
+        case BM1397:
+            BM1397_set_job_difficulty_mask(pow2_target);
+            break;
+        case BM1366:
+            BM1366_set_job_difficulty_mask(pow2_target);
+            break;
+        case BM1368:
+            BM1368_set_job_difficulty_mask(pow2_target);
+            break;
+        case BM1370:
+            BM1370_set_job_difficulty_mask(pow2_target);
+            break;
+        default:
+            ESP_LOGE(TAG, "Unknown ASIC id %d — cannot set difficulty mask", GLOBAL_STATE->DEVICE_CONFIG.family.asic.id);
+            return;
+    }
+    current_ticket_mask = pow2_target;
 }
 
 void ASIC_set_frequency(GlobalState * GLOBAL_STATE)

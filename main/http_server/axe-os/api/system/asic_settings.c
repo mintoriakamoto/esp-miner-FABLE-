@@ -5,6 +5,7 @@
 #include "global_state.h"
 #include "asic.h"
 #include "http_server.h"
+#include "nvs_config.h"
 
 static int system_asic_prebuffer_len = 256;
 
@@ -44,26 +45,38 @@ esp_err_t GET_system_asic(httpd_req_t *req)
     cJSON_AddNumberToObject(root, "asicCount", GLOBAL_STATE->DEVICE_CONFIG.family.asic_count);
     cJSON_AddNumberToObject(root, "hashDomains", GLOBAL_STATE->DEVICE_CONFIG.family.asic.hash_domains);
 
+    cJSON_AddNumberToObject(root, "smallCoreCount", GLOBAL_STATE->DEVICE_CONFIG.family.asic.small_core_count);
+
     cJSON_AddNumberToObject(root, "defaultFrequency", GLOBAL_STATE->DEVICE_CONFIG.family.asic.default_frequency_mhz);
 
-    // Create arrays for frequency and voltage options based on ASIC model
+    // With overclock unlocked, offer the extended preset tables
+    bool overclock = nvs_config_get_bool(NVS_CONFIG_OVERCLOCK_ENABLED);
+    const uint16_t *frequency_options = (overclock && GLOBAL_STATE->DEVICE_CONFIG.family.asic.frequency_options_oc)
+                                            ? GLOBAL_STATE->DEVICE_CONFIG.family.asic.frequency_options_oc
+                                            : GLOBAL_STATE->DEVICE_CONFIG.family.asic.frequency_options;
+    const uint16_t *voltage_options = (overclock && GLOBAL_STATE->DEVICE_CONFIG.family.asic.voltage_options_oc)
+                                            ? GLOBAL_STATE->DEVICE_CONFIG.family.asic.voltage_options_oc
+                                            : GLOBAL_STATE->DEVICE_CONFIG.family.asic.voltage_options;
+
     cJSON *freqOptions = cJSON_CreateArray();
     size_t count = 0;
-    while (GLOBAL_STATE->DEVICE_CONFIG.family.asic.frequency_options[count] != 0) {
-        cJSON_AddItemToArray(freqOptions, cJSON_CreateNumber(GLOBAL_STATE->DEVICE_CONFIG.family.asic.frequency_options[count]));
+    while (frequency_options[count] != 0) {
+        cJSON_AddItemToArray(freqOptions, cJSON_CreateNumber(frequency_options[count]));
         count++;
     }
     cJSON_AddItemToObject(root, "frequencyOptions", freqOptions);
+    cJSON_AddNumberToObject(root, "maxFrequency", GLOBAL_STATE->DEVICE_CONFIG.family.asic.max_frequency_mhz);
 
     cJSON_AddNumberToObject(root, "defaultVoltage", GLOBAL_STATE->DEVICE_CONFIG.family.asic.default_voltage_mv);
 
     cJSON *voltageOptions = cJSON_CreateArray();
     count = 0;
-    while (GLOBAL_STATE->DEVICE_CONFIG.family.asic.voltage_options[count] != 0) {
-        cJSON_AddItemToArray(voltageOptions, cJSON_CreateNumber(GLOBAL_STATE->DEVICE_CONFIG.family.asic.voltage_options[count]));
+    while (voltage_options[count] != 0) {
+        cJSON_AddItemToArray(voltageOptions, cJSON_CreateNumber(voltage_options[count]));
         count++;
     }
     cJSON_AddItemToObject(root, "voltageOptions", voltageOptions);
+    cJSON_AddNumberToObject(root, "maxVoltage", GLOBAL_STATE->DEVICE_CONFIG.family.asic.max_voltage_mv);
 
     esp_err_t res = HTTP_send_json(req, root, &system_asic_prebuffer_len);
 

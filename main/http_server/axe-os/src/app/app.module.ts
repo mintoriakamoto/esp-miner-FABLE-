@@ -35,6 +35,7 @@ import { DesignComponent } from './components/design/design.component';
 import { AppLayoutModule } from './layout/app.layout.module';
 import { ANSIPipe } from './pipes/ansi.pipe';
 import { DateAgoPipe } from './pipes/date-ago.pipe';
+import { ByteSuffixPipe } from './pipes/byte-suffix.pipe';
 import { HashSuffixPipe } from './pipes/hash-suffix.pipe';
 import { DiffSuffixPipe } from './pipes/diff-suffix.pipe';
 import { AddressPipe } from './pipes/address.pipe';
@@ -91,6 +92,7 @@ const components = [
     SettingsComponent,
     ANSIPipe,
     DateAgoPipe,
+    ByteSuffixPipe,
     HashSuffixPipe,
     DiffSuffixPipe,
     AddressPipe,

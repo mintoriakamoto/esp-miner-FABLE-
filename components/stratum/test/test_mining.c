@@ -120,6 +120,104 @@ TEST_CASE("Validate version mask incrementing", "[mining]")
     TEST_ASSERT_EQUAL_UINT32(0x20000404, rolled_version);
 }
 
+TEST_CASE("Validate version mask incrementing edge cases", "[mining]")
+{
+    // mask == 0 returns the value unchanged
+    TEST_ASSERT_EQUAL_UINT32(0x12345678, increment_bitmask(0x12345678, 0));
+
+    // BIP310 mask: lowest mask bit is bit 13
+    TEST_ASSERT_EQUAL_UINT32(0x20002004, increment_bitmask(0x20000004, 0x1fffe000));
+
+    // carry ripples through contiguous masked bits (0xe000 + 0x2000 -> 0x10000)
+    TEST_ASSERT_EQUAL_UINT32(0x20010004, increment_bitmask(0x2000e004, 0x1fffe000));
+
+    // overflow wraps around inside the mask, non-mask bits are untouched
+    TEST_ASSERT_EQUAL_UINT32(0x20000004, increment_bitmask(0x3fffe004, 0x1fffe000));
+
+    // non-contiguous mask (bits 5 and 7) counts through all states and wraps,
+    // never leaking a carry into bits outside the mask
+    TEST_ASSERT_EQUAL_UINT32(0x24, increment_bitmask(0x04, 0xa0));
+    TEST_ASSERT_EQUAL_UINT32(0x84, increment_bitmask(0x24, 0xa0));
+    TEST_ASSERT_EQUAL_UINT32(0xa4, increment_bitmask(0x84, 0xa0));
+    TEST_ASSERT_EQUAL_UINT32(0x04, increment_bitmask(0xa4, 0xa0));
+}
+
+TEST_CASE("Coinbase hasher matches full coinbase hash", "[mining]")
+{
+    const char *coinbase_1 = "01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff20020862062f503253482f04b8864e5008";
+    const char *coinbase_2 = "072f736c7573682f000000000100f2052a010000001976a914d23fcdf86f7e756a64a7a9688ef9903327048ed988ac00000000";
+    const char *extranonce = "e9695791";
+
+    coinbase_hasher_t hasher = {0};
+    TEST_ASSERT_TRUE(coinbase_hasher_init(&hasher, coinbase_1, extranonce, coinbase_2));
+
+    // several extranonce_2 counter values and widths
+    const uint64_t counters[] = {0, 1, 0xfe, 0x123456789abcdef0ULL};
+    const uint32_t lengths[] = {4, 8, 6, 8};
+    for (int i = 0; i < 4; i++) {
+        uint8_t extranonce_2_bin[16] = {0};
+        size_t copy_len = lengths[i] < sizeof(uint64_t) ? lengths[i] : sizeof(uint64_t);
+        memcpy(extranonce_2_bin, &counters[i], copy_len);
+
+        char extranonce_2_str[33];
+        extranonce_2_generate(counters[i], lengths[i], extranonce_2_str);
+
+        uint8_t expected[32], got[32];
+        calculate_coinbase_tx_hash(coinbase_1, coinbase_2, extranonce, extranonce_2_str, expected);
+        coinbase_hasher_hash(&hasher, extranonce_2_bin, lengths[i], got);
+        TEST_ASSERT_EQUAL_UINT8_ARRAY(expected, got, 32);
+    }
+
+    // re-seeding replaces the cached prefix
+    const char *extranonce_b = "00000000";
+    TEST_ASSERT_TRUE(coinbase_hasher_init(&hasher, coinbase_1, extranonce_b, coinbase_2));
+    uint8_t expected[32], got[32];
+    calculate_coinbase_tx_hash(coinbase_1, coinbase_2, extranonce_b, "99999999", expected);
+    const uint8_t en2[4] = {0x99, 0x99, 0x99, 0x99};
+    coinbase_hasher_hash(&hasher, en2, 4, got);
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(expected, got, 32);
+
+    coinbase_hasher_free(&hasher);
+    coinbase_hasher_free(&hasher); // double free must be safe
+}
+
+TEST_CASE("Validate bm job construction with version rolling", "[mining]")
+{
+    mining_notify notify_message;
+    notify_message.prev_block_hash = "bf44fd3513dc7b837d60e5c628b572b448d204a8000007490000000000000000";
+    notify_message.version = 0x20000004;
+    notify_message.target = 0x1705dd01;
+    notify_message.ntime = 0x64658bd8;
+    uint8_t merkle_root[32];
+    hex2bin("cd1be82132ef0d12053dcece1fa0247fcfdb61d4dbd3eb32ea9ef9b4c604a846", merkle_root, 32);
+
+    const uint32_t version_mask = 0x1fffe000;
+    bm_job job = { 0 };
+    construct_bm_job(&notify_message, merkle_root, version_mask, 1000, &job);
+    TEST_ASSERT_EQUAL_UINT8(4, job.num_midstates);
+
+    // midstate1..3 must be the midstates of successive rolled versions,
+    // computed here independently of bm_job_compute_midstates
+    uint8_t prev_block_hash[32];
+    hex2bin(notify_message.prev_block_hash, prev_block_hash, 32);
+    reverse_endianness_per_word(prev_block_hash);
+
+    uint8_t midstate_data[64];
+    memcpy(midstate_data + 4, prev_block_hash, 32);
+    memcpy(midstate_data + 36, merkle_root, 28);
+
+    const uint8_t *job_midstates[4] = {job.midstate, job.midstate1, job.midstate2, job.midstate3};
+    uint32_t rolled_version = notify_message.version;
+    for (int i = 0; i < 4; i++) {
+        memcpy(midstate_data, &rolled_version, 4);
+        uint8_t midstate[32], expected[32];
+        midstate_sha256_bin(midstate_data, 64, midstate);
+        reverse_32bit_words(midstate, expected);
+        TEST_ASSERT_EQUAL_UINT8_ARRAY(expected, job_midstates[i], 32);
+        rolled_version = increment_bitmask(rolled_version, version_mask);
+    }
+}
+
 // Values calculated from esp-miner/components/stratum/test/verifiers/bm1397.py
 // TEST_CASE("Validate bm job construction 2", "[mining]")
 // {

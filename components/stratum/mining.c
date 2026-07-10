@@ -1,5 +1,6 @@
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <limits.h>
 #include "mining.h"
 #include "utils.h"
@@ -53,6 +54,64 @@ void calculate_coinbase_tx_hash_bin(const uint8_t *prefix, size_t prefix_len,
     free(buf);
 }
 
+bool coinbase_hasher_init(coinbase_hasher_t *hasher, const char *coinbase_1,
+                          const char *extranonce_1, const char *coinbase_2)
+{
+    coinbase_hasher_free(hasher);
+
+    size_t prefix_len = (strlen(coinbase_1) + strlen(extranonce_1)) / 2;
+    uint8_t *prefix_bin = malloc(prefix_len > 0 ? prefix_len : 1);
+    if (prefix_bin == NULL) {
+        return false;
+    }
+    size_t offset = hex2bin(coinbase_1, prefix_bin, prefix_len);
+    offset += hex2bin(extranonce_1, prefix_bin + offset, prefix_len - offset);
+
+    hasher->coinbase_2_len = strlen(coinbase_2) / 2;
+    hasher->coinbase_2_bin = malloc(hasher->coinbase_2_len > 0 ? hasher->coinbase_2_len : 1);
+    if (hasher->coinbase_2_bin == NULL) {
+        free(prefix_bin);
+        return false;
+    }
+    hex2bin(coinbase_2, hasher->coinbase_2_bin, hasher->coinbase_2_len);
+
+    mbedtls_sha256_init(&hasher->prefix_ctx);
+    mbedtls_sha256_starts(&hasher->prefix_ctx, 0);
+    mbedtls_sha256_update(&hasher->prefix_ctx, prefix_bin, offset);
+    free(prefix_bin);
+
+    hasher->valid = true;
+    return true;
+}
+
+void coinbase_hasher_hash(const coinbase_hasher_t *hasher, const uint8_t *extranonce_2,
+                          size_t extranonce_2_len, uint8_t dest[32])
+{
+    mbedtls_sha256_context ctx;
+    mbedtls_sha256_init(&ctx);
+    mbedtls_sha256_clone(&ctx, &hasher->prefix_ctx);
+    mbedtls_sha256_update(&ctx, extranonce_2, extranonce_2_len);
+    mbedtls_sha256_update(&ctx, hasher->coinbase_2_bin, hasher->coinbase_2_len);
+
+    uint8_t first_hash[32];
+    mbedtls_sha256_finish(&ctx, first_hash);
+    mbedtls_sha256_free(&ctx);
+
+    mbedtls_sha256(first_hash, 32, dest, 0);
+}
+
+void coinbase_hasher_free(coinbase_hasher_t *hasher)
+{
+    if (!hasher->valid) {
+        return;
+    }
+    mbedtls_sha256_free(&hasher->prefix_ctx);
+    free(hasher->coinbase_2_bin);
+    hasher->coinbase_2_bin = NULL;
+    hasher->coinbase_2_len = 0;
+    hasher->valid = false;
+}
+
 void calculate_merkle_root_hash(const uint8_t coinbase_tx_hash[32], const uint8_t merkle_branches[][32], const int num_merkle_branches, uint8_t dest[32])
 {
     uint8_t both_merkles[64];
@@ -63,6 +122,40 @@ void calculate_merkle_root_hash(const uint8_t coinbase_tx_hash[32], const uint8_
     }
 
     memcpy(dest, both_merkles, 32);
+}
+
+// Compute the midstate(s) covering block header bytes 0-63: version(4B) +
+// prev_block_hash(32B) + merkle_root[0:28]. Inputs are in header byte order;
+// the stored midstates are word-reversed for the BM job packet.
+void bm_job_compute_midstates(bm_job *job, const uint8_t prev_block_hash[32],
+                              const uint8_t merkle_root[32], uint32_t version_mask)
+{
+    uint8_t midstate_data[64];
+    memcpy(midstate_data, &job->version, 4);
+    memcpy(midstate_data + 4, prev_block_hash, 32);
+    memcpy(midstate_data + 36, merkle_root, 28);
+
+    uint8_t midstate[32];
+    midstate_sha256_bin(midstate_data, 64, midstate);
+    reverse_32bit_words(midstate, job->midstate);
+
+    if (version_mask != 0)
+    {
+        uint8_t *extra_midstates[3] = {job->midstate1, job->midstate2, job->midstate3};
+        uint32_t rolled_version = job->version;
+        for (int i = 0; i < 3; i++)
+        {
+            rolled_version = increment_bitmask(rolled_version, version_mask);
+            memcpy(midstate_data, &rolled_version, 4);
+            midstate_sha256_bin(midstate_data, 64, midstate);
+            reverse_32bit_words(midstate, extra_midstates[i]);
+        }
+        job->num_midstates = 4;
+    }
+    else
+    {
+        job->num_midstates = 1;
+    }
 }
 
 // take a mining_notify struct with ascii hex strings and convert it to a bm_job struct
@@ -80,40 +173,7 @@ void construct_bm_job(mining_notify *params, const uint8_t merkle_root[32], cons
     reverse_endianness_per_word(prev_block_hash);
     reverse_32bit_words(prev_block_hash, new_job->prev_block_hash);
 
-    // make the midstate hash
-    uint8_t midstate_data[64];
-
-    // copy 64 bytes header data into midstate (and deal with endianess)
-    memcpy(midstate_data, &new_job->version, 4);      // copy version
-    memcpy(midstate_data + 4, prev_block_hash, 32);   // copy prev_block_hash
-    memcpy(midstate_data + 36, merkle_root, 28);      // copy merkle_root
-
-    uint8_t midstate[32];
-    midstate_sha256_bin(midstate_data, 64, midstate); // make the midstate hash
-    reverse_32bit_words(midstate, new_job->midstate); // reverse the midstate words for the BM job packet
-
-    if (version_mask != 0)
-    {
-        uint32_t rolled_version = increment_bitmask(new_job->version, version_mask);
-        memcpy(midstate_data, &rolled_version, 4);
-        midstate_sha256_bin(midstate_data, 64, midstate);
-        reverse_32bit_words(midstate, new_job->midstate1);
-
-        rolled_version = increment_bitmask(rolled_version, version_mask);
-        memcpy(midstate_data, &rolled_version, 4);
-        midstate_sha256_bin(midstate_data, 64, midstate);
-        reverse_32bit_words(midstate, new_job->midstate2);
-
-        rolled_version = increment_bitmask(rolled_version, version_mask);
-        memcpy(midstate_data, &rolled_version, 4);
-        midstate_sha256_bin(midstate_data, 64, midstate);
-        reverse_32bit_words(midstate, new_job->midstate3);
-        new_job->num_midstates = 4;
-    }
-    else
-    {
-        new_job->num_midstates = 1;
-    }
+    bm_job_compute_midstates(new_job, prev_block_hash, merkle_root, version_mask);
 }
 
 void extranonce_2_generate(uint64_t extranonce_2, uint32_t length, char dest[static length * 2 + 1])
@@ -166,20 +226,11 @@ double test_nonce_value(const bm_job *job, const uint32_t nonce, const uint32_t 
 
 uint32_t increment_bitmask(const uint32_t value, const uint32_t mask)
 {
-    // if mask is zero, just return the original value
-    if (mask == 0)
-        return value;
-
-    uint32_t carry = (value & mask) + (mask & -mask);      // increment the least significant bit of the mask
-    uint32_t overflow = carry & ~mask;                     // find overflowed bits that are not in the mask
-    uint32_t new_value = (value & ~mask) | (carry & mask); // set bits according to the mask
-
-    // Handle carry propagation
-    if (overflow > 0)
-    {
-        uint32_t carry_mask = (overflow << 1);                // shift left to get the mask where carry should be propagated
-        new_value = increment_bitmask(new_value, carry_mask); // recursively handle carry propagation
-    }
-
-    return new_value;
+    // Treat the masked bits as a counter and increment it in constant time:
+    // setting every non-mask bit to 1 lets the +1 carry ripple across gaps in
+    // a non-contiguous mask in a single add. Bits outside the mask are always
+    // preserved, and the counter wraps around within the mask on overflow
+    // (never leaking a carry into version bits the pool didn't negotiate).
+    // With mask == 0 this reduces to the original value.
+    return (((value | ~mask) + 1) & mask) | (value & ~mask);
 }

@@ -26,6 +26,26 @@ static void generate_work(GlobalState *GLOBAL_STATE, mining_notify *notification
 static void generate_work_sv2(GlobalState *GLOBAL_STATE, sv2_job_t *job, double difficulty);
 static void generate_work_sv2_ext(GlobalState *GLOBAL_STATE, sv2_ext_job_t *job, double difficulty, uint64_t extranonce_2_counter);
 
+// Cached SHA-256 midstate of the coinbase prefix for the current V1 job, so
+// each extranonce_2 increment only hashes the bytes that change instead of
+// hex-decoding and re-hashing the entire coinbase transaction.
+static coinbase_hasher_t coinbase_hasher = {0};
+// Extranonce_1 the hasher was seeded with; the stratum task swaps the pointer
+// in GLOBAL_STATE when the pool sends set_extranonce, so a pointer compare
+// detects that the cached prefix is stale.
+static const char *coinbase_hasher_extranonce_1 = NULL;
+
+static void seed_coinbase_hasher(GlobalState *GLOBAL_STATE, mining_notify *notification)
+{
+    coinbase_hasher_extranonce_1 = GLOBAL_STATE->extranonce_str;
+    if (notification->coinbase_1 == NULL || notification->coinbase_2 == NULL ||
+        coinbase_hasher_extranonce_1 == NULL ||
+        !coinbase_hasher_init(&coinbase_hasher, notification->coinbase_1,
+                              coinbase_hasher_extranonce_1, notification->coinbase_2)) {
+        coinbase_hasher_free(&coinbase_hasher);
+    }
+}
+
 // Free a work item using the correct free function for the protocol it was created under
 static void free_work_item(GlobalState *GLOBAL_STATE, void *work, stratum_protocol_t protocol)
 {
@@ -83,6 +103,30 @@ void create_jobs_task(void *pvParameters)
         uint64_t start_time = esp_timer_get_time();
         void *new_work = queue_dequeue_timeout(&GLOBAL_STATE->stratum_queue, timeout_ms);
         timeout_ms -= (esp_timer_get_time() - start_time) / 1000;
+        if (timeout_ms < 0) {
+            timeout_ms = 0;
+        }
+
+        // Apply difficulty and version-mask changes on every iteration, not just
+        // when a new notify is dequeued. Pools send set_difficulty/set_version_mask
+        // between notifies; extranonce_2-rolled jobs generated in that window must
+        // already use the new values, or shares get rejected as too-low-difficulty.
+        if (GLOBAL_STATE->new_set_mining_difficulty_msg) {
+            ESP_LOGI(TAG, "New pool difficulty %.2f", GLOBAL_STATE->pool_difficulty);
+            difficulty = GLOBAL_STATE->pool_difficulty;
+            GLOBAL_STATE->new_set_mining_difficulty_msg = false;
+            if (GLOBAL_STATE->ASIC_initalized) {
+                // Keep the hardware ticket mask at or below the pool difficulty
+                // so the chips never withhold submittable shares
+                ASIC_set_job_difficulty_mask(GLOBAL_STATE, difficulty);
+            }
+        }
+
+        if (GLOBAL_STATE->new_stratum_version_rolling_msg && GLOBAL_STATE->ASIC_initalized) {
+            ESP_LOGI(TAG, "Set chip version rolls %i", (int)(GLOBAL_STATE->version_mask >> 13));
+            ASIC_set_version_mask(GLOBAL_STATE, GLOBAL_STATE->version_mask);
+            GLOBAL_STATE->new_stratum_version_rolling_msg = false;
+        }
 
         if (new_work != NULL) {
             active_protocol = GLOBAL_STATE->stratum_protocol;
@@ -113,21 +157,10 @@ void create_jobs_task(void *pvParameters)
                 }
             } else {
                 ESP_LOGI(TAG, "New Work Dequeued %s", ((mining_notify *)new_work)->job_id);
+                seed_coinbase_hasher(GLOBAL_STATE, (mining_notify *)new_work);
             }
 
             current_work = new_work;
-
-            if (GLOBAL_STATE->new_set_mining_difficulty_msg) {
-                ESP_LOGI(TAG, "New pool difficulty %.2f", GLOBAL_STATE->pool_difficulty);
-                difficulty = GLOBAL_STATE->pool_difficulty;
-                GLOBAL_STATE->new_set_mining_difficulty_msg = false;
-            }
-
-            if (GLOBAL_STATE->new_stratum_version_rolling_msg && GLOBAL_STATE->ASIC_initalized) {
-                ESP_LOGI(TAG, "Set chip version rolls %i", (int)(GLOBAL_STATE->version_mask >> 13));
-                ASIC_set_version_mask(GLOBAL_STATE, GLOBAL_STATE->version_mask);
-                GLOBAL_STATE->new_stratum_version_rolling_msg = false;
-            }
 
             extranonce_2 = 0;
 
@@ -194,11 +227,29 @@ static void generate_work(GlobalState *GLOBAL_STATE, mining_notify *notification
         ESP_LOGE(TAG, "extranonce_2_len %d exceeds maximum %d, skipping job", GLOBAL_STATE->extranonce_2_len, MAX_EXTRANONCE2_LEN);
         return;
     }
+    uint32_t extranonce_2_len = GLOBAL_STATE->extranonce_2_len;
+
+    // Little-endian counter bytes, zero-padded to extranonce_2_len
+    // (same encoding as extranonce_2_generate)
+    uint8_t extranonce_2_bin[MAX_EXTRANONCE2_LEN] = {0};
+    size_t copy_len = (extranonce_2_len < sizeof(extranonce_2)) ? extranonce_2_len : sizeof(extranonce_2);
+    memcpy(extranonce_2_bin, &extranonce_2, copy_len);
+
     char extranonce_2_str[MAX_EXTRANONCE2_STR];
-    extranonce_2_generate(extranonce_2, GLOBAL_STATE->extranonce_2_len, extranonce_2_str);
+    bin2hex(extranonce_2_bin, extranonce_2_len, extranonce_2_str, sizeof(extranonce_2_str));
+
+    // The pool can swap extranonce_1 between jobs (set_extranonce); re-seed if so
+    if (GLOBAL_STATE->extranonce_str != coinbase_hasher_extranonce_1) {
+        seed_coinbase_hasher(GLOBAL_STATE, notification);
+    }
 
     uint8_t coinbase_tx_hash[32];
-    calculate_coinbase_tx_hash(notification->coinbase_1, notification->coinbase_2, GLOBAL_STATE->extranonce_str, extranonce_2_str, coinbase_tx_hash);
+    if (coinbase_hasher.valid) {
+        coinbase_hasher_hash(&coinbase_hasher, extranonce_2_bin, extranonce_2_len, coinbase_tx_hash);
+    } else {
+        // Fallback (e.g. transient OOM during seeding): hash the full coinbase
+        calculate_coinbase_tx_hash(notification->coinbase_1, notification->coinbase_2, GLOBAL_STATE->extranonce_str, extranonce_2_str, coinbase_tx_hash);
+    }
 
     uint8_t merkle_root[32];
     calculate_merkle_root_hash(coinbase_tx_hash, (uint8_t(*)[32])notification->merkle_branches, notification->n_merkle_branches, merkle_root);
@@ -254,37 +305,7 @@ static void generate_work_sv2(GlobalState *GLOBAL_STATE, sv2_job_t *sv2_job, dou
     reverse_32bit_words(sv2_job->merkle_root, next_job->merkle_root);
     reverse_32bit_words(sv2_job->prev_hash, next_job->prev_block_hash);
 
-    // Compute midstate(s) using the same logic as construct_bm_job.
-    // Midstate covers bytes 0-63 of block header: version(4B) + prev_hash(32B) + merkle_root[0:28](28B).
-    uint8_t midstate_data[64];
-    uint32_t base_version = sv2_job->version;
-    memcpy(midstate_data, &base_version, 4);
-    memcpy(midstate_data + 4, sv2_job->prev_hash, 32);
-    memcpy(midstate_data + 36, sv2_job->merkle_root, 28);
-
-    uint8_t midstate[32];
-    midstate_sha256_bin(midstate_data, 64, midstate);
-    reverse_32bit_words(midstate, next_job->midstate);
-
-    if (version_mask != 0) {
-        uint32_t rolled_version = increment_bitmask(base_version, version_mask);
-        memcpy(midstate_data, &rolled_version, 4);
-        midstate_sha256_bin(midstate_data, 64, midstate);
-        reverse_32bit_words(midstate, next_job->midstate1);
-
-        rolled_version = increment_bitmask(rolled_version, version_mask);
-        memcpy(midstate_data, &rolled_version, 4);
-        midstate_sha256_bin(midstate_data, 64, midstate);
-        reverse_32bit_words(midstate, next_job->midstate2);
-
-        rolled_version = increment_bitmask(rolled_version, version_mask);
-        memcpy(midstate_data, &rolled_version, 4);
-        midstate_sha256_bin(midstate_data, 64, midstate);
-        reverse_32bit_words(midstate, next_job->midstate3);
-        next_job->num_midstates = 4;
-    } else {
-        next_job->num_midstates = 1;
-    }
+    bm_job_compute_midstates(next_job, sv2_job->prev_hash, sv2_job->merkle_root, version_mask);
 
     // SV2 job metadata
     char jobid_str[16];
@@ -357,36 +378,7 @@ static void generate_work_sv2_ext(GlobalState *GLOBAL_STATE, sv2_ext_job_t *ext_
     reverse_32bit_words(merkle_root, next_job->merkle_root);
     reverse_32bit_words(ext_job->prev_hash, next_job->prev_block_hash);
 
-    // Compute midstate(s)
-    uint8_t midstate_data[64];
-    uint32_t base_version = ext_job->version;
-    memcpy(midstate_data, &base_version, 4);
-    memcpy(midstate_data + 4, ext_job->prev_hash, 32);
-    memcpy(midstate_data + 36, merkle_root, 28);
-
-    uint8_t midstate[32];
-    midstate_sha256_bin(midstate_data, 64, midstate);
-    reverse_32bit_words(midstate, next_job->midstate);
-
-    if (version_mask != 0) {
-        uint32_t rolled_version = increment_bitmask(base_version, version_mask);
-        memcpy(midstate_data, &rolled_version, 4);
-        midstate_sha256_bin(midstate_data, 64, midstate);
-        reverse_32bit_words(midstate, next_job->midstate1);
-
-        rolled_version = increment_bitmask(rolled_version, version_mask);
-        memcpy(midstate_data, &rolled_version, 4);
-        midstate_sha256_bin(midstate_data, 64, midstate);
-        reverse_32bit_words(midstate, next_job->midstate2);
-
-        rolled_version = increment_bitmask(rolled_version, version_mask);
-        memcpy(midstate_data, &rolled_version, 4);
-        midstate_sha256_bin(midstate_data, 64, midstate);
-        reverse_32bit_words(midstate, next_job->midstate3);
-        next_job->num_midstates = 4;
-    } else {
-        next_job->num_midstates = 1;
-    }
+    bm_job_compute_midstates(next_job, ext_job->prev_hash, merkle_root, version_mask);
 
     // Job metadata
     char jobid_str[16];

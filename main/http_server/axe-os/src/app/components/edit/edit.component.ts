@@ -16,6 +16,7 @@ import { SliderModule } from 'primeng/slider';
 import { TooltipModule } from 'primeng/tooltip';
 import { InputTextModule } from 'primeng/inputtext';
 import { DateAgoPipe } from 'src/app/pipes/date-ago.pipe';
+import { HashSuffixPipe } from 'src/app/pipes/hash-suffix.pipe';
 
 type SelectOption = {
   name: string;
@@ -59,6 +60,10 @@ export class EditComponent implements OnInit, OnDestroy, OnChanges {
   public frequencyOptions: number[] = [];
   public defaultVoltage: number = 0;
   public voltageOptions: number[] = [];
+  public maxFrequency: number = 0;
+  public maxVoltage: number = 0;
+  public smallCoreCount: number = 0;
+  public asicCount: number = 1;
 
   private destroy$ = new Subject<void>();
 
@@ -167,6 +172,11 @@ export class EditComponent implements OnInit, OnDestroy, OnChanges {
       this.frequencyOptions = asic.frequencyOptions;
       this.defaultVoltage = asic.defaultVoltage;
       this.voltageOptions = asic.voltageOptions;
+      // Hard limits and hashrate estimation inputs (older firmware may not send these)
+      this.maxFrequency = asic.maxFrequency ?? 0;
+      this.maxVoltage = asic.maxVoltage ?? 0;
+      this.smallCoreCount = asic.smallCoreCount ?? 0;
+      this.asicCount = asic.asicCount ?? 1;
       this.statsLimit = info.statsLimit || 720;
 
       // Check if overclock is enabled in NVS
@@ -187,8 +197,16 @@ export class EditComponent implements OnInit, OnDestroy, OnChanges {
             Validators.min(-1),
             Validators.max(this.displayTimeoutMaxValue)
           ]],
-          coreVoltage: [info.coreVoltage, [Validators.required]],
-          frequency: [info.frequency, [Validators.required]],
+          coreVoltage: [info.coreVoltage, [
+            Validators.required,
+            Validators.min(850),
+            ...(this.maxVoltage ? [Validators.max(this.maxVoltage)] : [])
+          ]],
+          frequency: [info.frequency, [
+            Validators.required,
+            Validators.min(50),
+            ...(this.maxFrequency ? [Validators.max(this.maxFrequency)] : [])
+          ]],
           autofanspeed: [info.autofanspeed == 1, [Validators.required]],
           minfanspeed: [info.minFanSpeed, [Validators.required]],
           manualFanSpeed: [info.manualFanSpeed, [Validators.required]],
@@ -306,7 +324,16 @@ export class EditComponent implements OnInit, OnDestroy, OnChanges {
   }
 
   get selectFrequency(): SelectOption[] {
-    return this.buildSelectOptions('frequency', this.frequencyOptions, this.defaultFrequency);
+    return this.buildSelectOptions('frequency', this.frequencyOptions, this.defaultFrequency)
+      .map(option => this.smallCoreCount
+        ? { ...option, name: `${option.name} — ~${this.expectedHashrate(option.value)}` }
+        : option);
+  }
+
+  // Theoretical hashrate at a given frequency: freq x small cores x ASIC count
+  public expectedHashrate(frequencyMhz: number): string {
+    const ghs = frequencyMhz * this.smallCoreCount * this.asicCount / 1000;
+    return HashSuffixPipe.transform(ghs);
   }
 
   get selectVoltage(): SelectOption[] {

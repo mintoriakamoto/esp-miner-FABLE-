@@ -124,6 +124,13 @@ void BM1368_set_version_mask(uint32_t version_mask)
     _send_BM1368(TYPE_CMD | GROUP_ALL | CMD_WRITE, version_cmd, 6, BM1368_SERIALTX_DEBUG);
 }
 
+void BM1368_set_job_difficulty_mask(uint32_t difficulty)
+{
+    uint8_t difficulty_mask[6];
+    get_difficulty_mask(difficulty, difficulty_mask);
+    _send_BM1368((TYPE_CMD | GROUP_ALL | CMD_WRITE), difficulty_mask, 6, BM1368_SERIALTX_DEBUG);
+}
+
 void BM1368_set_hash_counting_number(uint32_t hcn) {
     uint8_t set_10_hash_counting[6] = {0x00, 0x10, 0x00, 0x00, 0x00, 0x00};
     set_10_hash_counting[2] = (hcn >> 24) & 0xFF;
@@ -219,11 +226,7 @@ uint8_t BM1368_init(void * pvParameters)
         vTaskDelay(pdMS_TO_TICKS(500));
     }
 
-    uint16_t difficulty = GLOBAL_STATE->DEVICE_CONFIG.family.asic.difficulty;
-
-    uint8_t difficulty_mask[6];
-    get_difficulty_mask(difficulty, difficulty_mask);
-    _send_BM1368((TYPE_CMD | GROUP_ALL | CMD_WRITE), difficulty_mask, 6, BM1368_SERIALTX_DEBUG);    
+    BM1368_set_job_difficulty_mask(GLOBAL_STATE->DEVICE_CONFIG.family.asic.difficulty);
 
     do_frequency_transition(GLOBAL_STATE, BM1368_send_hash_frequency);
 
