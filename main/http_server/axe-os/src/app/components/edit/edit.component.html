@@ -8,7 +8,22 @@
             <ng-container *ngIf="settingsUnlocked">
                 <label for="frequency" class="col-12 md:col-2 md:m-0">Frequency</label>
                 <div class="col-12 md:col-10">
-                    <input pInputText id="frequency" formControlName="frequency" type="number" />
+                    <input pInputText id="frequency" formControlName="frequency" type="number" [attr.list]="'frequencyPresets'" />
+                    <datalist id="frequencyPresets">
+                        <option *ngFor="let option of frequencyOptions" [value]="option"></option>
+                    </datalist>
+                    <small class="block mt-1 text-color-secondary" *ngIf="!form.get('frequency')?.errors">
+                        <ng-container *ngIf="maxFrequency">Allowed range: 50&ndash;{{maxFrequency}} MHz.</ng-container>
+                        <ng-container *ngIf="smallCoreCount && form.get('frequency')?.value">
+                            Expected hashrate: ~{{expectedHashrate(form.get('frequency')?.value)}}
+                        </ng-container>
+                    </small>
+                    <small class="block mt-1 text-red-500" *ngIf="form.get('frequency')?.errors?.['max']">
+                        Frequency exceeds the {{maxFrequency}} MHz limit for this ASIC and will be rejected.
+                    </small>
+                    <small class="block mt-1 text-red-500" *ngIf="form.get('frequency')?.errors?.['min']">
+                        Frequency must be at least 50 MHz.
+                    </small>
                 </div>
             </ng-container>
             <ng-container *ngIf="!settingsUnlocked">
@@ -29,7 +44,19 @@
             <ng-container *ngIf="settingsUnlocked">
                 <label for="coreVoltage" class="col-12 md:col-2 md:m-0">Core Voltage</label>
                 <div class="col-12 md:col-10">
-                    <input pInputText id="coreVoltage" formControlName="coreVoltage" type="number" />
+                    <input pInputText id="coreVoltage" formControlName="coreVoltage" type="number" [attr.list]="'voltagePresets'" />
+                    <datalist id="voltagePresets">
+                        <option *ngFor="let option of voltageOptions" [value]="option"></option>
+                    </datalist>
+                    <small class="block mt-1 text-color-secondary" *ngIf="maxVoltage && !form.get('coreVoltage')?.errors">
+                        Allowed range: 850&ndash;{{maxVoltage}} mV. Higher voltage means more heat &mdash; watch temperatures.
+                    </small>
+                    <small class="block mt-1 text-red-500" *ngIf="form.get('coreVoltage')?.errors?.['max']">
+                        Core voltage exceeds the {{maxVoltage}} mV limit for this ASIC and will be rejected.
+                    </small>
+                    <small class="block mt-1 text-red-500" *ngIf="form.get('coreVoltage')?.errors?.['min']">
+                        Core voltage must be at least 850 mV.
+                    </small>
                 </div>
             </ng-container>
             <ng-container *ngIf="!settingsUnlocked">

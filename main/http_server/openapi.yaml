@@ -605,11 +605,16 @@ components:
             - 450
         frequencyOptions:
           type: array
-          description: Available frequency options for the ASIC model in MHz
+          description: Available frequency options for the ASIC model in MHz (extended list when overclock is enabled)
           items:
             type: number
           examples:
             - [400, 425, 450, 475, 485, 500, 525, 550, 575]
+        maxFrequency:
+          type: number
+          description: Hard upper frequency limit for the ASIC model in MHz, enforced by the settings API
+          examples:
+            - 675
         defaultVoltage:
           type: number
           description: Default voltage for the ASIC model in millivolts
@@ -617,11 +622,21 @@ components:
             - 1100
         voltageOptions:
           type: array
-          description: Available voltage options for the ASIC model in millivolts
+          description: Available voltage options for the ASIC model in millivolts (extended list when overclock is enabled)
           items:
             type: number
           examples:
             - [1100, 1150, 1200, 1250, 1300]
+        maxVoltage:
+          type: number
+          description: Hard upper core voltage limit for the ASIC model in millivolts, enforced by the settings API
+          examples:
+            - 1350
+        smallCoreCount:
+          type: number
+          description: Number of small cores per ASIC, used to estimate the expected hashrate (frequency x small cores x ASIC count)
+          examples:
+            - 894
 
     SystemStatistics:
       type: object

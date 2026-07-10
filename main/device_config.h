@@ -21,8 +21,12 @@ typedef struct {
     uint16_t chip_id;
     uint16_t default_frequency_mhz;
     const uint16_t* frequency_options;
+    const uint16_t* frequency_options_oc; // presets offered when overclock is unlocked
+    uint16_t max_frequency_mhz;           // hard ceiling enforced by the settings API
     uint16_t default_voltage_mv;
     const uint16_t* voltage_options;
+    const uint16_t* voltage_options_oc;   // presets offered when overclock is unlocked
+    uint16_t max_voltage_mv;              // hard ceiling enforced by the settings API
     uint16_t hashrate_target;
     uint16_t difficulty;
     uint16_t core_count;
@@ -84,16 +88,29 @@ static const uint16_t BM1368_FREQUENCY_OPTIONS[]   = {400, 425, 450, 475, 485, 4
 static const uint16_t BM1370_FREQUENCY_OPTIONS[]   = {400, 490, 525, 550, 600, 625,                     0};
 static const uint16_t BM1370_FRQUENCY_XP_OPTIONS[] = {350, 375, 380, 400, 410,                        0};
 
+// Extended presets, only offered by the settings API once overclock is
+// unlocked. Values near the top need good cooling and win the silicon
+// lottery; the thermal safe mode and the max_* ceilings below are the rails.
+static const uint16_t BM1397_FREQUENCY_OPTIONS_OC[]   = {400, 425, 450, 475, 485, 500, 525, 550, 575, 600, 625, 650,           0};
+static const uint16_t BM1366_FREQUENCY_OPTIONS_OC[]   = {400, 425, 450, 475, 485, 500, 525, 550, 575, 600, 625, 650,           0};
+static const uint16_t BM1368_FREQUENCY_OPTIONS_OC[]   = {400, 425, 450, 475, 485, 490, 500, 525, 550, 575, 600, 625, 650,      0};
+static const uint16_t BM1370_FREQUENCY_OPTIONS_OC[]   = {400, 450, 490, 525, 550, 575, 600, 625, 650, 675, 700,                0};
+static const uint16_t BM1370_FRQUENCY_XP_OPTIONS_OC[] = {350, 375, 380, 400, 410, 425, 450, 475, 490, 525,                     0};
+
 static const uint16_t BM1397_VOLTAGE_OPTIONS[] = {1100, 1150, 1200, 1250, 1300, 1350, 1400, 1450, 1500, 0};
 static const uint16_t BM1366_VOLTAGE_OPTIONS[] = {1100, 1150, 1200, 1250, 1300,                         0};
 static const uint16_t BM1368_VOLTAGE_OPTIONS[] = {1100, 1150, 1166, 1200, 1250, 1300,                   0};
 static const uint16_t BM1370_VOLTAGE_OPTIONS[] = {1000, 1060, 1100, 1150, 1200, 1250,                   0};
 
-static const AsicConfig ASIC_BM1397 = { .id = BM1397, .name = "BM1397", .chip_id = 1397, .default_frequency_mhz = 425, .frequency_options = BM1397_FREQUENCY_OPTIONS, .default_voltage_mv = 1400, .voltage_options = BM1397_VOLTAGE_OPTIONS, .difficulty = 256, .core_count = 168, .small_core_count =  672, .hash_domains = 1, .hashrate_test_percentage_target = 0.85, .default_asic_timeout = 20};
-static const AsicConfig ASIC_BM1366 = { .id = BM1366, .name = "BM1366", .chip_id = 1366, .default_frequency_mhz = 485, .frequency_options = BM1366_FREQUENCY_OPTIONS, .default_voltage_mv = 1200, .voltage_options = BM1366_VOLTAGE_OPTIONS, .difficulty = 256, .core_count = 112, .small_core_count =  894, .hash_domains = 4, .hashrate_test_percentage_target = 0.85, .default_asic_timeout = 2000};
-static const AsicConfig ASIC_BM1368 = { .id = BM1368, .name = "BM1368", .chip_id = 1368, .default_frequency_mhz = 490, .frequency_options = BM1368_FREQUENCY_OPTIONS, .default_voltage_mv = 1166, .voltage_options = BM1368_VOLTAGE_OPTIONS, .difficulty = 256, .core_count =  80, .small_core_count = 1276, .hash_domains = 4, .hashrate_test_percentage_target = 0.80, .default_asic_timeout = 500};
-static const AsicConfig ASIC_BM1370 = { .id = BM1370, .name = "BM1370", .chip_id = 1370, .default_frequency_mhz = 525, .frequency_options = BM1370_FREQUENCY_OPTIONS, .default_voltage_mv = 1150, .voltage_options = BM1370_VOLTAGE_OPTIONS, .difficulty = 256, .core_count = 128, .small_core_count = 2040, .hash_domains = 4, .hashrate_test_percentage_target = 0.85, .default_asic_timeout = 500};
-static const AsicConfig ASIC_BM1370XP = { .id = BM1370, .name = "BM1370", .chip_id = 1370, .default_frequency_mhz = 400, .frequency_options = BM1370_FRQUENCY_XP_OPTIONS, .default_voltage_mv = 1150, .voltage_options = BM1370_VOLTAGE_OPTIONS, .difficulty = 256, .core_count = 128, .small_core_count = 2040, .hash_domains = 4, .hashrate_test_percentage_target = 0.85, .default_asic_timeout = 500};
+static const uint16_t BM1366_VOLTAGE_OPTIONS_OC[] = {1100, 1150, 1200, 1250, 1300, 1350,                0};
+static const uint16_t BM1368_VOLTAGE_OPTIONS_OC[] = {1100, 1150, 1166, 1200, 1250, 1300, 1350,          0};
+static const uint16_t BM1370_VOLTAGE_OPTIONS_OC[] = {1000, 1060, 1100, 1150, 1200, 1250, 1300,          0};
+
+static const AsicConfig ASIC_BM1397 = { .id = BM1397, .name = "BM1397", .chip_id = 1397, .default_frequency_mhz = 425, .frequency_options = BM1397_FREQUENCY_OPTIONS, .frequency_options_oc = BM1397_FREQUENCY_OPTIONS_OC, .max_frequency_mhz = 675, .default_voltage_mv = 1400, .voltage_options = BM1397_VOLTAGE_OPTIONS, .voltage_options_oc = BM1397_VOLTAGE_OPTIONS,    .max_voltage_mv = 1500, .difficulty = 256, .core_count = 168, .small_core_count =  672, .hash_domains = 1, .hashrate_test_percentage_target = 0.85, .default_asic_timeout = 20};
+static const AsicConfig ASIC_BM1366 = { .id = BM1366, .name = "BM1366", .chip_id = 1366, .default_frequency_mhz = 485, .frequency_options = BM1366_FREQUENCY_OPTIONS, .frequency_options_oc = BM1366_FREQUENCY_OPTIONS_OC, .max_frequency_mhz = 675, .default_voltage_mv = 1200, .voltage_options = BM1366_VOLTAGE_OPTIONS, .voltage_options_oc = BM1366_VOLTAGE_OPTIONS_OC, .max_voltage_mv = 1350, .difficulty = 256, .core_count = 112, .small_core_count =  894, .hash_domains = 4, .hashrate_test_percentage_target = 0.85, .default_asic_timeout = 2000};
+static const AsicConfig ASIC_BM1368 = { .id = BM1368, .name = "BM1368", .chip_id = 1368, .default_frequency_mhz = 490, .frequency_options = BM1368_FREQUENCY_OPTIONS, .frequency_options_oc = BM1368_FREQUENCY_OPTIONS_OC, .max_frequency_mhz = 675, .default_voltage_mv = 1166, .voltage_options = BM1368_VOLTAGE_OPTIONS, .voltage_options_oc = BM1368_VOLTAGE_OPTIONS_OC, .max_voltage_mv = 1350, .difficulty = 256, .core_count =  80, .small_core_count = 1276, .hash_domains = 4, .hashrate_test_percentage_target = 0.80, .default_asic_timeout = 500};
+static const AsicConfig ASIC_BM1370 = { .id = BM1370, .name = "BM1370", .chip_id = 1370, .default_frequency_mhz = 525, .frequency_options = BM1370_FREQUENCY_OPTIONS, .frequency_options_oc = BM1370_FREQUENCY_OPTIONS_OC, .max_frequency_mhz = 725, .default_voltage_mv = 1150, .voltage_options = BM1370_VOLTAGE_OPTIONS, .voltage_options_oc = BM1370_VOLTAGE_OPTIONS_OC, .max_voltage_mv = 1300, .difficulty = 256, .core_count = 128, .small_core_count = 2040, .hash_domains = 4, .hashrate_test_percentage_target = 0.85, .default_asic_timeout = 500};
+static const AsicConfig ASIC_BM1370XP = { .id = BM1370, .name = "BM1370", .chip_id = 1370, .default_frequency_mhz = 400, .frequency_options = BM1370_FRQUENCY_XP_OPTIONS, .frequency_options_oc = BM1370_FRQUENCY_XP_OPTIONS_OC, .max_frequency_mhz = 725, .default_voltage_mv = 1150, .voltage_options = BM1370_VOLTAGE_OPTIONS, .voltage_options_oc = BM1370_VOLTAGE_OPTIONS_OC, .max_voltage_mv = 1300, .difficulty = 256, .core_count = 128, .small_core_count = 2040, .hash_domains = 4, .hashrate_test_percentage_target = 0.85, .default_asic_timeout = 500};
 
 static const AsicConfig default_asic_configs[] = {
     ASIC_BM1397,

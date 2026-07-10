@@ -700,6 +700,23 @@ bool check_settings_and_update(const cJSON * const root, char **redirect_url)
             }
         }
 
+        // The generic min/max above can't know the ASIC model; enforce the
+        // per-chip hard ceilings here so no request can push the core voltage
+        // or frequency beyond what the fitted ASIC tolerates.
+        if (key == NVS_CONFIG_ASIC_VOLTAGE && cJSON_IsNumber(item)) {
+            uint16_t max_voltage = GLOBAL_STATE->DEVICE_CONFIG.family.asic.max_voltage_mv;
+            if (max_voltage > 0 && item->valuedouble > max_voltage) {
+                ESP_LOGW(TAG, "Core voltage %d mV exceeds the %u mV limit for %s", item->valueint, max_voltage, GLOBAL_STATE->DEVICE_CONFIG.family.asic.name);
+                result = false;
+            }
+        }
+        if (key == NVS_CONFIG_ASIC_FREQUENCY && cJSON_IsNumber(item)) {
+            uint16_t max_frequency = GLOBAL_STATE->DEVICE_CONFIG.family.asic.max_frequency_mhz;
+            if (max_frequency > 0 && item->valuedouble > max_frequency) {
+                ESP_LOGW(TAG, "Frequency %f MHz exceeds the %u MHz limit for %s", item->valuedouble, max_frequency, GLOBAL_STATE->DEVICE_CONFIG.family.asic.name);
+                result = false;
+            }
+        }
         if (key == NVS_CONFIG_DISPLAY && cJSON_IsString(item) && get_display_config(item->valuestring) == NULL) {
             ESP_LOGW(TAG, "Invalid display config: '%s'", item->valuestring);
             result = false;
