@@ -1,6 +1,7 @@
 #include "unity.h"
 #include "mining.h"
 #include "utils.h"
+#include "mbedtls/sha256.h"
 
 #include <limits.h>
 #include <string.h>
@@ -333,4 +334,57 @@ TEST_CASE("Test nonce diff checking 2", "[mining test_nonce][not-on-qemu]")
     uint32_t rolled_version = job.version | version_bits;
     double diff = test_nonce_value(&job, nonce, rolled_version);
     TEST_ASSERT_EQUAL_INT(683, (int)diff);
+}
+
+// Reference nonce check, independent of the optimized midstate paths in
+// test_nonce_value: build the full 80-byte header and double-SHA it with mbedtls.
+static double reference_nonce_value(const bm_job *job, const uint32_t nonce, const uint32_t rolled_version)
+{
+    uint8_t header[80];
+    memcpy(header, &rolled_version, 4);
+    reverse_32bit_words(job->prev_block_hash, header + 4);
+    reverse_32bit_words(job->merkle_root, header + 36);
+    memcpy(header + 68, &job->ntime, 4);
+    memcpy(header + 72, &job->target, 4);
+    memcpy(header + 76, &nonce, 4);
+
+    uint8_t first[32], hash[32];
+    mbedtls_sha256(header, 80, first, 0);
+    mbedtls_sha256(first, 32, hash, 0);
+    return hash_to_pdiff(hash);
+}
+
+TEST_CASE("Test nonce diff checking with rolled versions", "[mining test_nonce][not-on-qemu]")
+{
+    mining_notify notify_message;
+    notify_message.prev_block_hash = "d02b10fc0d4711eae1a805af50a8a83312a2215e00017f2b0000000000000000";
+    notify_message.version = 0x20000004;
+    notify_message.target = 0x1705ae3a;
+    notify_message.ntime = 0x646ff1a9;
+    uint8_t merkle_root[32];
+    hex2bin("6d0359c451434605c52a5a9ce074340be47c2c63840731f9edf1db3f26b1cdd9", merkle_root, 32);
+
+    const uint32_t version_mask = 0x1fffe000;
+    bm_job job = { 0 };
+    construct_bm_job(&notify_message, merkle_root, version_mask, 1000, &job);
+    job.version_mask = version_mask; // as set by generate_work
+    TEST_ASSERT_EQUAL_UINT8(4, job.num_midstates);
+
+    const uint32_t nonces[] = {0x276E8947, 0xdeadbeef, 0x00000000};
+
+    // Versions 0-3 rolls hit the stored midstates; further rolls and
+    // arbitrary in-chip rolled versions take the recompute fallback.
+    uint32_t rolled_version = notify_message.version;
+    for (int roll = 0; roll < 6; roll++) {
+        for (size_t n = 0; n < sizeof(nonces) / sizeof(nonces[0]); n++) {
+            double expected = reference_nonce_value(&job, nonces[n], rolled_version);
+            double got = test_nonce_value(&job, nonces[n], rolled_version);
+            TEST_ASSERT_EQUAL_DOUBLE(expected, got);
+        }
+        rolled_version = increment_bitmask(rolled_version, version_mask);
+    }
+
+    uint32_t chip_rolled = notify_message.version | (0x1a5a << 13);
+    double expected = reference_nonce_value(&job, 0x276E8947, chip_rolled);
+    TEST_ASSERT_EQUAL_DOUBLE(expected, test_nonce_value(&job, 0x276E8947, chip_rolled));
 }

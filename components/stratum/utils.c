@@ -7,6 +7,7 @@
 #include "esp_heap_caps.h"
 
 #include "mbedtls/sha256.h"
+#include "sha256d.h"
 
 #define HASH_CNT_LSB 0x100000000uLL // 2^32 hashes for difficulty 1
 
@@ -76,24 +77,34 @@ void print_hex(const uint8_t *b, size_t len,
 
 void double_sha256_bin(const uint8_t *data, const size_t data_len, uint8_t dest[32])
 {
+    if (data_len == 64) {
+        sha256d_64(data, dest);
+        return;
+    }
+
     uint8_t first_hash_output[32];
 
     mbedtls_sha256(data, data_len, first_hash_output, 0);
-    mbedtls_sha256(first_hash_output, 32, dest, 0);
+    sha256_32(first_hash_output, dest);
 }
 
 void midstate_sha256_bin(const uint8_t *data, const size_t data_len, uint8_t dest[32])
 {
-    mbedtls_sha256_context ctx;
+    (void)data_len; // the midstate covers exactly the first 64-byte block
 
-    // Calculate midstate
-    mbedtls_sha256_init(&ctx);
-    mbedtls_sha256_starts(&ctx, 0);
-    mbedtls_sha256_update(&ctx, data, 64);
-
-    memcpy(dest, ctx.state, 32);
-
-    mbedtls_sha256_free(&ctx);
+    // State words serialized big-endian, the standard SHA-256 layout. This is
+    // what the old memcpy of mbedtls ctx.state produced on the target (the
+    // ESP-IDF hardware-SHA port keeps the state pre-swapped) and what the BM
+    // job packet builders expect; unlike the ctx.state copy it no longer
+    // depends on which SHA backend mbedtls was built with.
+    uint32_t state[8];
+    sha256_midstate_words(data, state);
+    for (int i = 0; i < 8; i++) {
+        dest[4 * i] = (uint8_t)(state[i] >> 24);
+        dest[4 * i + 1] = (uint8_t)(state[i] >> 16);
+        dest[4 * i + 2] = (uint8_t)(state[i] >> 8);
+        dest[4 * i + 3] = (uint8_t)state[i];
+    }
 }
 
 void reverse_32bit_words(const uint8_t src[32], uint8_t dest[32])

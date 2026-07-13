@@ -1,6 +1,7 @@
 idf_component_register(
 SRCS
     "utils.c"
+    "sha256d.c"
     "mining.c"
     "stratum_api.c"
     "stratum_socket.c"

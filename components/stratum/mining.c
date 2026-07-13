@@ -4,6 +4,7 @@
 #include <limits.h>
 #include "mining.h"
 #include "utils.h"
+#include "sha256d.h"
 #include "mbedtls/sha256.h"
 #include "esp_log.h"
 
@@ -97,7 +98,7 @@ void coinbase_hasher_hash(const coinbase_hasher_t *hasher, const uint8_t *extran
     mbedtls_sha256_finish(&ctx, first_hash);
     mbedtls_sha256_free(&ctx);
 
-    mbedtls_sha256(first_hash, 32, dest, 0);
+    sha256_32(first_hash, dest);
 }
 
 void coinbase_hasher_free(coinbase_hasher_t *hasher)
@@ -198,28 +199,68 @@ double hash_to_pdiff(const uint8_t hash[32])
     return truediffone / s64;
 }
 
+// Recover the raw SHA-256 state words from a midstate stored in the job.
+// Stored midstates are in BM job packet order: word-order-reversed,
+// big-endian state words (see bm_job_compute_midstates / midstate_sha256_bin).
+static void unpack_stored_midstate(const uint8_t stored[32], uint32_t state[8])
+{
+    for (int i = 0; i < 8; i++) {
+        const uint8_t *p = stored + 4 * (7 - i);
+        state[i] = ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | (uint32_t)p[3];
+    }
+}
+
+// Look up the stored midstate matching rolled_version, if any. job->midstate
+// always covers job->version; midstate1-3 cover the next rolled versions when
+// the job was built with 4 midstates (BM1397 with version rolling).
+static bool job_cached_midstate(const bm_job *job, const uint32_t rolled_version, uint32_t state[8])
+{
+    if (rolled_version == job->version) {
+        unpack_stored_midstate(job->midstate, state);
+        return true;
+    }
+    if (job->num_midstates == 4) {
+        const uint8_t *extra_midstates[3] = {job->midstate1, job->midstate2, job->midstate3};
+        uint32_t version = job->version;
+        for (int i = 0; i < 3; i++) {
+            version = increment_bitmask(version, job->version_mask);
+            if (rolled_version == version) {
+                unpack_stored_midstate(extra_midstates[i], state);
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 ///////cgminer nonce testing
 /* testing a nonce and return the diff - 0 means invalid */
 double test_nonce_value(const bm_job *job, const uint32_t nonce, const uint32_t rolled_version)
 {
-    uint8_t header[80];
+    // Resume the double SHA-256 of the 80-byte header from the midstate of
+    // its first 64 bytes: reuse the midstate already computed for the job
+    // when the version matches, otherwise recompute just that first block.
+    uint32_t midstate[8];
+    if (!job_cached_midstate(job, rolled_version, midstate)) {
+        uint8_t block0[64];
+        uint8_t merkle_root[32]; // header byte order
+        memcpy(block0, &rolled_version, 4);
+        reverse_32bit_words(job->prev_block_hash, block0 + 4);
+        reverse_32bit_words(job->merkle_root, merkle_root);
+        memcpy(block0 + 36, merkle_root, 28);
+        sha256_midstate_words(block0, midstate);
+    }
 
-    // // TODO: use the midstate hash instead of hashing the whole header
-    // uint32_t rolled_version = job->version;
-    // for (int i = 0; i < midstate_index; i++) {
-    //     rolled_version = increment_bitmask(rolled_version, job->version_mask);
-    // }
-
-    // copy data from job to header
-    memcpy(header, &rolled_version, 4);
-    reverse_32bit_words(job->prev_block_hash, header + 4);
-    reverse_32bit_words(job->merkle_root, header + 36);
-    memcpy(header + 68, &job->ntime, 4);
-    memcpy(header + 72, &job->target, 4);
-    memcpy(header + 76, &nonce, 4);
+    // Header bytes 64-79: last merkle root word (== job->merkle_root[0..3],
+    // since the stored merkle root is word-order-reversed), ntime, nbits, nonce.
+    uint8_t tail[16];
+    memcpy(tail, job->merkle_root, 4);
+    memcpy(tail + 4, &job->ntime, 4);
+    memcpy(tail + 8, &job->target, 4);
+    memcpy(tail + 12, &nonce, 4);
 
     uint8_t hash_result[32];
-    double_sha256_bin(header, 80, hash_result);
+    sha256d_80_from_midstate(midstate, tail, hash_result);
 
     return hash_to_pdiff(hash_result);
 }

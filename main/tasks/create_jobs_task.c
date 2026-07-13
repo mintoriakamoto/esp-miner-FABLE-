@@ -35,6 +35,16 @@ static coinbase_hasher_t coinbase_hasher = {0};
 // detects that the cached prefix is stale.
 static const char *coinbase_hasher_extranonce_1 = NULL;
 
+// Version mask to build job midstates with. Only the BM1397 consumes
+// per-rolled-version midstates from the job packet; the newer chips receive
+// the full merkle root and roll versions internally, so computing the three
+// extra rolled-version midstates for them is pure wasted hashing. The job's
+// version_mask field is still set to the real negotiated mask by the callers.
+static uint32_t midstate_version_mask(GlobalState *GLOBAL_STATE)
+{
+    return GLOBAL_STATE->DEVICE_CONFIG.family.asic.id == BM1397 ? GLOBAL_STATE->version_mask : 0;
+}
+
 static void seed_coinbase_hasher(GlobalState *GLOBAL_STATE, mining_notify *notification)
 {
     coinbase_hasher_extranonce_1 = GLOBAL_STATE->extranonce_str;
@@ -261,7 +271,7 @@ static void generate_work(GlobalState *GLOBAL_STATE, mining_notify *notification
         return;
     }
 
-    construct_bm_job(notification, merkle_root, GLOBAL_STATE->version_mask, difficulty, next_job);
+    construct_bm_job(notification, merkle_root, midstate_version_mask(GLOBAL_STATE), difficulty, next_job);
 
     next_job->extranonce2 = strdup(extranonce_2_str);
     next_job->jobid = strdup(notification->job_id);
@@ -305,7 +315,7 @@ static void generate_work_sv2(GlobalState *GLOBAL_STATE, sv2_job_t *sv2_job, dou
     reverse_32bit_words(sv2_job->merkle_root, next_job->merkle_root);
     reverse_32bit_words(sv2_job->prev_hash, next_job->prev_block_hash);
 
-    bm_job_compute_midstates(next_job, sv2_job->prev_hash, sv2_job->merkle_root, version_mask);
+    bm_job_compute_midstates(next_job, sv2_job->prev_hash, sv2_job->merkle_root, midstate_version_mask(GLOBAL_STATE));
 
     // SV2 job metadata
     char jobid_str[16];
@@ -378,7 +388,7 @@ static void generate_work_sv2_ext(GlobalState *GLOBAL_STATE, sv2_ext_job_t *ext_
     reverse_32bit_words(merkle_root, next_job->merkle_root);
     reverse_32bit_words(ext_job->prev_hash, next_job->prev_block_hash);
 
-    bm_job_compute_midstates(next_job, ext_job->prev_hash, merkle_root, version_mask);
+    bm_job_compute_midstates(next_job, ext_job->prev_hash, merkle_root, midstate_version_mask(GLOBAL_STATE));
 
     // Job metadata
     char jobid_str[16];
