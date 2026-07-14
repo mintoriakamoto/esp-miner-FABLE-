@@ -316,6 +316,10 @@ task_result *BM1397_process_work(void *pvParameters)
     }
 
     if (!asic_result.is_job_response) {
+        if (asic_result.cmd.register_address >= sizeof(REGISTER_MAP) / sizeof(REGISTER_MAP[0])) {
+            ESP_LOGW(TAG, "Register address out of range: %02x", asic_result.cmd.register_address);
+            return NULL;
+        }
         result.register_type = REGISTER_MAP[asic_result.cmd.register_address];
         if (result.register_type == REGISTER_INVALID) {
             ESP_LOGW(TAG, "Unknown register read: %02x", asic_result.cmd.register_address);
@@ -334,6 +338,14 @@ task_result *BM1397_process_work(void *pvParameters)
     uint8_t rx_midstate_index = asic_result.job.id & 0x03;
 
     GlobalState *GLOBAL_STATE = (GlobalState *)pvParameters;
+
+    // job.id comes straight from the (weakly CRC-5 protected) frame; a corrupt
+    // frame can carry the high bit set, pushing this index past the 128-entry
+    // job tables. Reject rather than read out of bounds.
+    if (rx_job_id >= 128) {
+        ESP_LOGW(TAG, "Job id out of range: %d", rx_job_id);
+        return NULL;
+    }
 
     // Read active_jobs[rx_job_id] under the lock: BM1397_send_work() can free and
     // replace this slot from the create-jobs task, so dereferencing ->version /

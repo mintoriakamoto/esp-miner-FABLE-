@@ -290,10 +290,38 @@ static bool parse_mining_notify(cJSON *json, StratumApiV1Message *message)
         return false;
     }
 
+    // Every remaining field is pool-controlled. cJSON_GetArrayItem returns the
+    // node, but ->valuestring is NULL for any item that isn't a JSON string, so
+    // each must be type-checked before use or a hostile/buggy pool can drive a
+    // NULL deref (remote crash). strdup of a large coinbase can also fail.
+    cJSON *prev_hash_item = cJSON_GetArrayItem(params, 1);
+    cJSON *coinbase_1_item = cJSON_GetArrayItem(params, 2);
+    cJSON *coinbase_2_item = cJSON_GetArrayItem(params, 3);
+    cJSON *version_item = cJSON_GetArrayItem(params, 5);
+    cJSON *target_item = cJSON_GetArrayItem(params, 6);
+    cJSON *ntime_item = cJSON_GetArrayItem(params, 7);
+    if (!cJSON_IsString(prev_hash_item) || !cJSON_IsString(coinbase_1_item) ||
+        !cJSON_IsString(coinbase_2_item) || !cJSON_IsString(version_item) ||
+        !cJSON_IsString(target_item) || !cJSON_IsString(ntime_item)) {
+        ESP_LOGE(TAG, "Non-string field in mining.notify");
+        free(new_work);
+        return false;
+    }
+
     new_work->job_id = strdup(job_id_item->valuestring);
-    new_work->prev_block_hash = strdup(cJSON_GetArrayItem(params, 1)->valuestring);
-    new_work->coinbase_1 = strdup(cJSON_GetArrayItem(params, 2)->valuestring);
-    new_work->coinbase_2 = strdup(cJSON_GetArrayItem(params, 3)->valuestring);
+    new_work->prev_block_hash = strdup(prev_hash_item->valuestring);
+    new_work->coinbase_1 = strdup(coinbase_1_item->valuestring);
+    new_work->coinbase_2 = strdup(coinbase_2_item->valuestring);
+    if (!new_work->job_id || !new_work->prev_block_hash ||
+        !new_work->coinbase_1 || !new_work->coinbase_2) {
+        ESP_LOGE(TAG, "Memory allocation failed for mining.notify fields");
+        free(new_work->job_id);
+        free(new_work->prev_block_hash);
+        free(new_work->coinbase_1);
+        free(new_work->coinbase_2);
+        free(new_work);
+        return false;
+    }
 
     cJSON *merkle_branch = cJSON_GetArrayItem(params, 4);
     if (!merkle_branch || !cJSON_IsArray(merkle_branch)) {
@@ -315,14 +343,37 @@ static bool parse_mining_notify(cJSON *json, StratumApiV1Message *message)
         free(new_work);
         return false;
     }
-    new_work->merkle_branches = malloc(HASH_SIZE * new_work->n_merkle_branches);
+    // Every branch must be a hex string before hex2bin dereferences it.
+    for (size_t i = 0; i < new_work->n_merkle_branches; i++) {
+        if (!cJSON_IsString(cJSON_GetArrayItem(merkle_branch, i))) {
+            ESP_LOGE(TAG, "Non-string merkle branch in mining.notify");
+            free(new_work->job_id);
+            free(new_work->prev_block_hash);
+            free(new_work->coinbase_1);
+            free(new_work->coinbase_2);
+            free(new_work);
+            return false;
+        }
+    }
+    new_work->merkle_branches = new_work->n_merkle_branches
+                                    ? malloc(HASH_SIZE * new_work->n_merkle_branches)
+                                    : NULL;
+    if (new_work->n_merkle_branches && !new_work->merkle_branches) {
+        ESP_LOGE(TAG, "Memory allocation failed for merkle branches");
+        free(new_work->job_id);
+        free(new_work->prev_block_hash);
+        free(new_work->coinbase_1);
+        free(new_work->coinbase_2);
+        free(new_work);
+        return false;
+    }
     for (size_t i = 0; i < new_work->n_merkle_branches; i++) {
         hex2bin(cJSON_GetArrayItem(merkle_branch, i)->valuestring, new_work->merkle_branches + HASH_SIZE * i, HASH_SIZE);
     }
 
-    new_work->version = strtoul(cJSON_GetArrayItem(params, 5)->valuestring, NULL, 16);
-    new_work->target = strtoul(cJSON_GetArrayItem(params, 6)->valuestring, NULL, 16);
-    new_work->ntime = strtoul(cJSON_GetArrayItem(params, 7)->valuestring, NULL, 16);
+    new_work->version = strtoul(version_item->valuestring, NULL, 16);
+    new_work->target = strtoul(target_item->valuestring, NULL, 16);
+    new_work->ntime = strtoul(ntime_item->valuestring, NULL, 16);
 
     // params can be variable length
     int paramsLength = cJSON_GetArraySize(params);
@@ -385,10 +436,10 @@ static bool parse_set_extranonce(cJSON *json, StratumApiV1Message *message)
     message->extranonce_str = strdup(extranonce1->valuestring);
     
     int extranonce_2_len = extranonce2_size->valueint;
-    if (extranonce_2_len > MAX_EXTRANONCE_2_LEN) {
-        ESP_LOGW(TAG, "Extranonce_2_len %d exceeds maximum %d, clamping to maximum",
+    if (extranonce_2_len < 0 || extranonce_2_len > MAX_EXTRANONCE_2_LEN) {
+        ESP_LOGW(TAG, "Extranonce_2_len %d out of range [0, %d], clamping",
                  extranonce_2_len, MAX_EXTRANONCE_2_LEN);
-        extranonce_2_len = MAX_EXTRANONCE_2_LEN;
+        extranonce_2_len = extranonce_2_len < 0 ? 0 : MAX_EXTRANONCE_2_LEN;
     }
     message->extranonce_2_len = extranonce_2_len;
     ESP_LOGI(TAG, "Set extranonce: %s, size: %d", message->extranonce_str, message->extranonce_2_len);
@@ -444,10 +495,10 @@ static bool parse_subscribe_result(cJSON *json, StratumApiV1Message *message)
     message->extranonce_str = strdup(extranonce->valuestring);
     
     int extranonce_2_len = extranonce2_len->valueint;
-    if (extranonce_2_len > MAX_EXTRANONCE_2_LEN) {
-        ESP_LOGW(TAG, "Extranonce_2_len %d exceeds maximum %d, clamping to maximum", 
+    if (extranonce_2_len < 0 || extranonce_2_len > MAX_EXTRANONCE_2_LEN) {
+        ESP_LOGW(TAG, "Extranonce_2_len %d out of range [0, %d], clamping",
                  extranonce_2_len, MAX_EXTRANONCE_2_LEN);
-        extranonce_2_len = MAX_EXTRANONCE_2_LEN;
+        extranonce_2_len = extranonce_2_len < 0 ? 0 : MAX_EXTRANONCE_2_LEN;
     }
     message->extranonce_2_len = extranonce_2_len;
     message->response_success = true;

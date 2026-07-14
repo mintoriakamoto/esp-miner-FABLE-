@@ -7,7 +7,7 @@ TEST_CASE("Varint decode single byte", "[coinbase_decoder]")
 {
     uint8_t data[] = {0x42};
     int offset = 0;
-    uint64_t result = coinbase_decode_varint(data, &offset);
+    uint64_t result = coinbase_decode_varint(data, &offset, sizeof(data));
     TEST_ASSERT_TRUE(0x42 == result);
     TEST_ASSERT_EQUAL_INT(1, offset);
 }
@@ -16,7 +16,7 @@ TEST_CASE("Varint decode FD format", "[coinbase_decoder]")
 {
     uint8_t data[] = {0xFD, 0x34, 0x12};  // 0x1234 in little-endian
     int offset = 0;
-    uint64_t result = coinbase_decode_varint(data, &offset);
+    uint64_t result = coinbase_decode_varint(data, &offset, sizeof(data));
     TEST_ASSERT_TRUE(0x1234 == result);
     TEST_ASSERT_EQUAL_INT(3, offset);
 }
@@ -25,7 +25,7 @@ TEST_CASE("Varint decode FE format", "[coinbase_decoder]")
 {
     uint8_t data[] = {0xFE, 0x78, 0x56, 0x34, 0x12};  // 0x12345678 in little-endian
     int offset = 0;
-    uint64_t result = coinbase_decode_varint(data, &offset);
+    uint64_t result = coinbase_decode_varint(data, &offset, sizeof(data));
     TEST_ASSERT_TRUE(0x12345678 == result);
     TEST_ASSERT_EQUAL_INT(5, offset);
 }
@@ -34,9 +34,29 @@ TEST_CASE("Varint decode FF format", "[coinbase_decoder]")
 {
     uint8_t data[] = {0xFF, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08};
     int offset = 0;
-    uint64_t result = coinbase_decode_varint(data, &offset);
+    uint64_t result = coinbase_decode_varint(data, &offset, sizeof(data));
     TEST_ASSERT_TRUE(0x0807060504030201ULL == result);
     TEST_ASSERT_EQUAL_INT(9, offset);
+}
+
+TEST_CASE("Varint decode truncated multibyte is bounded", "[coinbase_decoder]")
+{
+    // A prefix that promises more trailing bytes than remain must not read
+    // past the buffer; the decoder advances offset past data_len to signal it.
+    uint8_t fd[] = {0xFD};              // needs 2 more, 0 present
+    int offset = 0;
+    TEST_ASSERT_EQUAL_UINT64(0, coinbase_decode_varint(fd, &offset, sizeof(fd)));
+    TEST_ASSERT_TRUE(offset > (int)sizeof(fd));
+
+    uint8_t fe[] = {0xFE, 0x01, 0x02}; // needs 4 more, only 2 present
+    offset = 0;
+    TEST_ASSERT_EQUAL_UINT64(0, coinbase_decode_varint(fe, &offset, sizeof(fe)));
+    TEST_ASSERT_TRUE(offset > (int)sizeof(fe));
+
+    uint8_t ff[] = {0xFF};             // needs 8 more, 0 present
+    offset = 0;
+    TEST_ASSERT_EQUAL_UINT64(0, coinbase_decode_varint(ff, &offset, sizeof(ff)));
+    TEST_ASSERT_TRUE(offset > (int)sizeof(ff));
 }
 
 TEST_CASE("Decode P2PKH address", "[coinbase_decoder]")

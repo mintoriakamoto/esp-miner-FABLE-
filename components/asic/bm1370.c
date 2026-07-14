@@ -317,7 +317,7 @@ int BM1370_set_default_baud(void)
 int BM1370_set_max_baud(void)
 {
     // divider of 0 for 3,125,000
-    ESP_LOGI(TAG, "Setting max baud of 1000000 ⁠​‌‌​​​‌​​‌‌​‌​​‌​‌‌‌​‌​​​‌‌​​​​‌​‌‌‌‌​​​​‌‌​​‌​‌⁠");
+    ESP_LOGI(TAG, "Setting max baud of 1000000 ");
 
     unsigned char fast_uart[] = {0x00, FAST_UART_CONFIGURATION, 0x11, 0x30, 0x02, 0x00};
     _send_BM1370((TYPE_CMD | GROUP_ALL | CMD_WRITE), fast_uart, 6, BM1370_SERIALTX_DEBUG);
@@ -355,7 +355,7 @@ void BM1370_send_work(void * pvParameters, bm_job * next_bm_job)
 
     //debug sent jobs - this can get crazy if the interval is short
     #if BM1370_DEBUG_JOBS
-    ESP_LOGI(TAG, "⁠​‌‌​​​‌​​‌‌​‌​​‌​‌‌‌​‌​​​‌‌​​​​‌​‌‌‌‌​​​​‌‌​​‌​‌⁠Send Job: %02X", job.job_id);
+    ESP_LOGI(TAG, "Send Job: %02X", job.job_id);
     #endif
 
     _send_BM1370((TYPE_JOB | GROUP_SINGLE | CMD_WRITE), (uint8_t *)&job, sizeof(BM1370_job), BM1370_DEBUG_WORK);
@@ -372,6 +372,10 @@ task_result * BM1370_process_work(void * pvParameters)
     }
     
     if (!asic_result.is_job_response) {
+        if (asic_result.cmd.register_address >= sizeof(REGISTER_MAP) / sizeof(REGISTER_MAP[0])) {
+            ESP_LOGW(TAG, "Register address out of range: %02x", asic_result.cmd.register_address);
+            return NULL;
+        }
         result.register_type = REGISTER_MAP[asic_result.cmd.register_address];
         if (result.register_type == REGISTER_INVALID) {
             ESP_LOGW(TAG, "Unknown register read: %02x", asic_result.cmd.register_address);

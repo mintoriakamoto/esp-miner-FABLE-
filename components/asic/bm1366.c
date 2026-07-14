@@ -354,6 +354,10 @@ task_result * BM1366_process_work(void * pvParameters)
     }
 
     if (!asic_result.is_job_response) {
+        if (asic_result.cmd.register_address >= sizeof(REGISTER_MAP) / sizeof(REGISTER_MAP[0])) {
+            ESP_LOGW(TAG, "Register address out of range: %02x", asic_result.cmd.register_address);
+            return NULL;
+        }
         result.register_type = REGISTER_MAP[asic_result.cmd.register_address];
         if (result.register_type == REGISTER_INVALID) {
             ESP_LOGW(TAG, "Unknown register read: %02x", asic_result.cmd.register_address);
@@ -366,6 +370,13 @@ task_result * BM1366_process_work(void * pvParameters)
     }
 
     uint8_t job_id = asic_result.job.id & 0xf8;
+    // job.id comes straight from the (weakly CRC-5 protected) frame; a corrupt
+    // frame can carry the high bit set, pushing this index past the 128-entry
+    // job tables. Reject rather than read out of bounds.
+    if (job_id >= 128) {
+        ESP_LOGW(TAG, "Job id out of range: %d", job_id);
+        return NULL;
+    }
     uint32_t nonce_h = ntohl(asic_result.job.nonce);
     uint8_t asic_nr = (uint8_t)((nonce_h >> 17) & 0xff) / address_interval; // Asic address is encoded in the next 8 bits
     uint8_t core_id = (uint8_t)((nonce_h >> 25) & 0x7f); // BM1366 has 112 cores, so it should be coded on 7 bits

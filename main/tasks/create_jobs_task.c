@@ -78,6 +78,13 @@ void create_jobs_task(void *pvParameters)
     // Initialize ASIC task module (moved from ASIC_task)
     GLOBAL_STATE->ASIC_TASK_MODULE.active_jobs = heap_caps_malloc(sizeof(bm_job *) * 128, MALLOC_CAP_SPIRAM);
     GLOBAL_STATE->valid_jobs = heap_caps_malloc(sizeof(uint8_t) * 128, MALLOC_CAP_SPIRAM);
+    if (GLOBAL_STATE->ASIC_TASK_MODULE.active_jobs == NULL || GLOBAL_STATE->valid_jobs == NULL) {
+        ESP_LOGE(TAG, "Failed to allocate job tables in PSRAM; cannot start mining");
+        // Every downstream access assumes these are valid; there is no safe way
+        // to continue. Halt this task rather than dereference NULL.
+        vTaskDelete(NULL);
+        return;
+    }
     for (int i = 0; i < 128; i++) {
         GLOBAL_STATE->ASIC_TASK_MODULE.active_jobs[i] = NULL;
         GLOBAL_STATE->valid_jobs[i] = 0;

@@ -29,7 +29,7 @@
  * @param offset Pointer to current offset, will be updated after reading
  * @return Decoded varint value
  */
-uint64_t coinbase_decode_varint(const uint8_t *data, int *offset);
+uint64_t coinbase_decode_varint(const uint8_t *data, int *offset, int data_len);
 
 /**
  * @brief Decode Bitcoin address from scriptPubKey

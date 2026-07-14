@@ -350,8 +350,11 @@ void stratum_v1_task(void *pvParameters)
                         mining_notify *next_notify_json_str = (mining_notify *) queue_dequeue(&GLOBAL_STATE->stratum_queue);
                         STRATUM_V1_free_mining_notify(next_notify_json_str);
                     }
-                    queue_enqueue(&GLOBAL_STATE->stratum_queue, stratum_api_v1_message.mining_notification);
+                    // Decode BEFORE enqueue: enqueuing transfers ownership to
+                    // create_jobs_task, which can free this item (on its next
+                    // dequeue) while we're still reading its fields here.
                     decode_mining_notification(GLOBAL_STATE, stratum_api_v1_message.mining_notification);
+                    queue_enqueue(&GLOBAL_STATE->stratum_queue, stratum_api_v1_message.mining_notification);
                     stratum_api_v1_message.mining_notification = NULL;
                     break;
 

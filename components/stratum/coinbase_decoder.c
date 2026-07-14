@@ -23,10 +23,26 @@ static void ensure_base58_init(void) {
     }
 }
 
-uint64_t coinbase_decode_varint(const uint8_t *data, int *offset) {
+uint64_t coinbase_decode_varint(const uint8_t *data, int *offset, int data_len) {
+    // data is a heap buffer of exactly data_len bytes (pool-controlled). A
+    // multi-byte varint prefix (0xFD/0xFE/0xFF) needs 2/4/8 trailing bytes; if
+    // fewer remain, reading them would run past the allocation. On underrun,
+    // advance *offset past data_len so the caller's bounds checks abort the
+    // parse, and return 0.
+    if (*offset < 0 || *offset >= data_len) {
+        *offset = data_len + 1;
+        return 0;
+    }
+
     uint8_t first_byte = data[*offset];
     (*offset)++;
-    
+
+    int extra = (first_byte < 0xFD) ? 0 : (first_byte == 0xFD) ? 2 : (first_byte == 0xFE) ? 4 : 8;
+    if (*offset + extra > data_len) {
+        *offset = data_len + 1;
+        return 0;
+    }
+
     if (first_byte < 0xFD) {
         return first_byte;
     } else if (first_byte == 0xFD) {
@@ -34,7 +50,7 @@ uint64_t coinbase_decode_varint(const uint8_t *data, int *offset) {
         *offset += 2;
         return value;
     } else if (first_byte == 0xFE) {
-        uint64_t value = data[*offset] | (data[*offset + 1] << 8) | 
+        uint64_t value = data[*offset] | (data[*offset + 1] << 8) |
                         (data[*offset + 2] << 16) | (data[*offset + 3] << 24);
         *offset += 4;
         return value;
@@ -286,7 +302,7 @@ esp_err_t coinbase_process_notification(const mining_notify *notification,
         return ESP_ERR_INVALID_ARG;
     }
     
-    uint64_t num_outputs = coinbase_decode_varint(coinbase_2_bin, &offset);
+    uint64_t num_outputs = coinbase_decode_varint(coinbase_2_bin, &offset, coinbase_2_len);
     result->output_count = 0;
     
     // Parse each output
@@ -305,7 +321,7 @@ esp_err_t coinbase_process_notification(const mining_notify *notification,
 
         // Read scriptPubKey length
         if (offset >= coinbase_2_len) break;
-        uint64_t script_len = coinbase_decode_varint(coinbase_2_bin, &offset);
+        uint64_t script_len = coinbase_decode_varint(coinbase_2_bin, &offset, coinbase_2_len);
 
         if (offset + script_len > coinbase_2_len) break;
 
@@ -313,7 +329,8 @@ esp_err_t coinbase_process_notification(const mining_notify *notification,
             if (value_satoshis > 0) {            
                 char output_address[MAX_ADDRESS_STRING_LEN];
                 coinbase_decode_address_from_scriptpubkey(coinbase_2_bin + offset, script_len, output_address, MAX_ADDRESS_STRING_LEN, bech32_hrp, is_testnet);
-                bool is_user_address = strncmp(user_address, output_address, strlen(output_address)) == 0;
+                bool is_user_address = user_address &&
+                    strncmp(user_address, output_address, strlen(output_address)) == 0;
 
                 if (is_user_address) result->user_value_satoshis += value_satoshis;
 
