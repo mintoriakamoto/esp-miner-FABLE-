@@ -45,17 +45,20 @@ TEST_CASE("Varint decode truncated multibyte is bounded", "[coinbase_decoder]")
     // past the buffer; the decoder advances offset past data_len to signal it.
     uint8_t fd[] = {0xFD};              // needs 2 more, 0 present
     int offset = 0;
-    TEST_ASSERT_EQUAL_UINT64(0, coinbase_decode_varint(fd, &offset, sizeof(fd)));
+    uint64_t result = coinbase_decode_varint(fd, &offset, sizeof(fd));
+    TEST_ASSERT_TRUE(0 == result);
     TEST_ASSERT_TRUE(offset > (int)sizeof(fd));
 
     uint8_t fe[] = {0xFE, 0x01, 0x02}; // needs 4 more, only 2 present
     offset = 0;
-    TEST_ASSERT_EQUAL_UINT64(0, coinbase_decode_varint(fe, &offset, sizeof(fe)));
+    result = coinbase_decode_varint(fe, &offset, sizeof(fe));
+    TEST_ASSERT_TRUE(0 == result);
     TEST_ASSERT_TRUE(offset > (int)sizeof(fe));
 
     uint8_t ff[] = {0xFF};             // needs 8 more, 0 present
     offset = 0;
-    TEST_ASSERT_EQUAL_UINT64(0, coinbase_decode_varint(ff, &offset, sizeof(ff)));
+    result = coinbase_decode_varint(ff, &offset, sizeof(ff));
+    TEST_ASSERT_TRUE(0 == result);
     TEST_ASSERT_TRUE(offset > (int)sizeof(ff));
 }
 
