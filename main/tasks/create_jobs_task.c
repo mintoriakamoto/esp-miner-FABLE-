@@ -128,21 +128,45 @@ void create_jobs_task(void *pvParameters)
         // when a new notify is dequeued. Pools send set_difficulty/set_version_mask
         // between notifies; extranonce_2-rolled jobs generated in that window must
         // already use the new values, or shares get rejected as too-low-difficulty.
-        if (GLOBAL_STATE->new_set_mining_difficulty_msg) {
-            ESP_LOGI(TAG, "New pool difficulty %.2f", GLOBAL_STATE->pool_difficulty);
-            difficulty = GLOBAL_STATE->pool_difficulty;
+        //
+        // The stratum task (other core) publishes pool_difficulty/version_mask and
+        // then raises the paired flag. pool_difficulty is a double: an unlocked
+        // read here can tear across the two 32-bit loads, and the value/flag pair
+        // can be observed out of order. Snapshot both flags and values under the
+        // same stratum_mux the writers now take, clearing the flags atomically —
+        // then do the logging and (blocking) ASIC UART writes outside the lock,
+        // since taskENTER_CRITICAL must not wrap blocking or heap-taking calls.
+        bool apply_difficulty, apply_version_mask;
+        double new_difficulty;
+        uint32_t new_version_mask;
+        bool asic_ready = GLOBAL_STATE->ASIC_initalized;
+
+        taskENTER_CRITICAL(&GLOBAL_STATE->stratum_mux);
+        apply_difficulty = GLOBAL_STATE->new_set_mining_difficulty_msg;
+        new_difficulty = GLOBAL_STATE->pool_difficulty;
+        if (apply_difficulty) {
             GLOBAL_STATE->new_set_mining_difficulty_msg = false;
-            if (GLOBAL_STATE->ASIC_initalized) {
+        }
+        apply_version_mask = GLOBAL_STATE->new_stratum_version_rolling_msg && asic_ready;
+        new_version_mask = GLOBAL_STATE->version_mask;
+        if (apply_version_mask) {
+            GLOBAL_STATE->new_stratum_version_rolling_msg = false;
+        }
+        taskEXIT_CRITICAL(&GLOBAL_STATE->stratum_mux);
+
+        if (apply_difficulty) {
+            ESP_LOGI(TAG, "New pool difficulty %.2f", new_difficulty);
+            difficulty = new_difficulty;
+            if (asic_ready) {
                 // Keep the hardware ticket mask at or below the pool difficulty
                 // so the chips never withhold submittable shares
                 ASIC_set_job_difficulty_mask(GLOBAL_STATE, difficulty);
             }
         }
 
-        if (GLOBAL_STATE->new_stratum_version_rolling_msg && GLOBAL_STATE->ASIC_initalized) {
-            ESP_LOGI(TAG, "Set chip version rolls %i", (int)(GLOBAL_STATE->version_mask >> 13));
-            ASIC_set_version_mask(GLOBAL_STATE, GLOBAL_STATE->version_mask);
-            GLOBAL_STATE->new_stratum_version_rolling_msg = false;
+        if (apply_version_mask) {
+            ESP_LOGI(TAG, "Set chip version rolls %i", (int)(new_version_mask >> 13));
+            ASIC_set_version_mask(GLOBAL_STATE, new_version_mask);
         }
 
         if (new_work != NULL) {

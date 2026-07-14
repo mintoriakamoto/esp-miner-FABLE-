@@ -550,8 +550,12 @@ static void stratum_v2_handle_set_target(GlobalState *GLOBAL_STATE, sv2_conn_t *
     memcpy(conn->target, max_target, 32);
     double pdiff = hash_to_pdiff(max_target);
     ESP_LOGI(TAG, "Set pool difficulty: %g", pdiff);
+    // Publish value then flag under stratum_mux so create_jobs (other core)
+    // never reads a torn double or a value/flag pair out of order.
+    taskENTER_CRITICAL(&GLOBAL_STATE->stratum_mux);
     GLOBAL_STATE->pool_difficulty = pdiff;
     GLOBAL_STATE->new_set_mining_difficulty_msg = true;
+    taskEXIT_CRITICAL(&GLOBAL_STATE->stratum_mux);
 }
 
 void stratum_v2_task(void *pvParameters)
@@ -570,8 +574,10 @@ void stratum_v2_task(void *pvParameters)
     }
 
     // Set default version mask for version rolling
+    taskENTER_CRITICAL(&GLOBAL_STATE->stratum_mux);
     GLOBAL_STATE->version_mask = STRATUM_DEFAULT_VERSION_MASK;
     GLOBAL_STATE->new_stratum_version_rolling_msg = true;
+    taskEXIT_CRITICAL(&GLOBAL_STATE->stratum_mux);
 
     // Heap-allocate sv2_conn to avoid dangling pointer after task exit
     sv2_conn_t *conn = calloc(1, sizeof(sv2_conn_t));
@@ -904,8 +910,10 @@ void stratum_v2_task(void *pvParameters)
             memcpy(conn->target, target, 32);
 
             double pdiff = hash_to_pdiff(target);
+            taskENTER_CRITICAL(&GLOBAL_STATE->stratum_mux);
             GLOBAL_STATE->pool_difficulty = pdiff;
             GLOBAL_STATE->new_set_mining_difficulty_msg = true;
+            taskEXIT_CRITICAL(&GLOBAL_STATE->stratum_mux);
 
             ESP_LOGI(TAG, "Mining channel opened: channel_id=%lu, group=%lu, type=%s",
                      channel_id, group_channel_id,

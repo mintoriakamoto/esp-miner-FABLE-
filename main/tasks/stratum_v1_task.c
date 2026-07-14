@@ -360,21 +360,29 @@ void stratum_v1_task(void *pvParameters)
 
                 case MINING_SET_DIFFICULTY:
                     ESP_LOGI(TAG, "Set pool difficulty: %.2f", stratum_api_v1_message.new_difficulty);
+                    // Publish value then flag under stratum_mux so create_jobs
+                    // (other core) never reads a torn double or a stale value.
+                    taskENTER_CRITICAL(&GLOBAL_STATE->stratum_mux);
                     GLOBAL_STATE->pool_difficulty = stratum_api_v1_message.new_difficulty;
                     GLOBAL_STATE->new_set_mining_difficulty_msg = true;
+                    taskEXIT_CRITICAL(&GLOBAL_STATE->stratum_mux);
                     break;
 
                 case MINING_SET_VERSION_MASK:
                     ESP_LOGI(TAG, "Set version mask: %08lx", stratum_api_v1_message.version_mask);
+                    taskENTER_CRITICAL(&GLOBAL_STATE->stratum_mux);
                     GLOBAL_STATE->version_mask = stratum_api_v1_message.version_mask;
                     GLOBAL_STATE->new_stratum_version_rolling_msg = true;
+                    taskEXIT_CRITICAL(&GLOBAL_STATE->stratum_mux);
                     break;
 
                 case STRATUM_RESULT_CONFIGURE:
                     if (stratum_api_v1_message.response_success) {
                         ESP_LOGI(TAG, "Configure result accepted, version mask: %08lx", stratum_api_v1_message.version_mask);
+                        taskENTER_CRITICAL(&GLOBAL_STATE->stratum_mux);
                         GLOBAL_STATE->version_mask = stratum_api_v1_message.version_mask;
                         GLOBAL_STATE->new_stratum_version_rolling_msg = true;
+                        taskEXIT_CRITICAL(&GLOBAL_STATE->stratum_mux);
                         protocol_coordinator_notify_success();
                     } else {
                         ESP_LOGE(TAG, "Configure result rejected: %s", stratum_api_v1_message.error_str);
