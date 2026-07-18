@@ -252,9 +252,9 @@
 
                     <div class="mb-3" *ngIf="info.current > 0">
                         <h6 class="flex justify-content-between mb-1">
-                            Input Current<span>{{info.current}} A</span>
+                            ASIC Current<span>{{info.current}} A</span>
                         </h6>
-                        <p-progressbar [value]="(info.current / (maxPower / nominalVoltage)) * 100" [styleClass]="'p-progressbar--thin'">
+                        <p-progressbar [value]="(info.current / (maxPower / info.coreVoltage)) * 100" [styleClass]="'p-progressbar--thin'">
                             <ng-template pTemplate="content" let-value></ng-template>
                         </p-progressbar>
                     </div>
