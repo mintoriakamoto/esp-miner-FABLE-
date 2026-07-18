@@ -62,13 +62,7 @@ jobs:
       run: |
         pkg="esp-miner-${{ github.ref_name }}"
         mkdir -p "$pkg"
-        cp build/esp-miner.bin \
-           build/www.bin \
-           build/bootloader/bootloader.bin \
-           build/partition_table/partition-table.bin \
-           build/ota_data_initial.bin \
-           esp-miner-merged.bin \
-           "$pkg/"
+        cp build/esp-miner.bin build/www.bin "$pkg/"
         tar -czvf "$pkg.tar.gz" "$pkg"
     - name: Release www.bin
       uses: softprops/action-gh-release@v2.4.2
