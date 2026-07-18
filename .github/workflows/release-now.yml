@@ -1,0 +1,75 @@
+name: Release Firmware Now (manual)
+
+# Manually-run release: builds the firmware and publishes a GitHub Release
+# from the current master with esp-miner.bin, www.bin, and a tarball of the
+# two. Run it from the Actions tab (Run workflow) whenever you want a release.
+# Because the release is created with GITHUB_TOKEN, it does not trigger the
+# release/factory workflows, so only these three assets are attached.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (blank = firmware-<short-sha>)"
+        required: false
+        default: ""
+      prerelease:
+        description: "Mark as pre-release"
+        type: boolean
+        default: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v6
+        with:
+          submodules: 'recursive'
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24.14.0'
+      - name: Build web dist
+        working-directory: ./main/http_server/axe-os
+        run: |
+          npm ci
+          npm run build
+      - name: esp-idf build
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.5.3
+          target: esp32s3
+          command: GITHUB_ACTIONS="true" idf.py build
+          path: '.'
+      - name: Resolve tag
+        id: tag
+        run: |
+          if [ -n "${{ github.event.inputs.tag }}" ]; then
+            echo "tag=${{ github.event.inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=firmware-$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Create release tarball
+        run: |
+          pkg="esp-miner-${{ steps.tag.outputs.tag }}"
+          mkdir -p "$pkg"
+          cp build/esp-miner.bin build/www.bin "$pkg/"
+          tar -czvf "$pkg.tar.gz" "$pkg"
+      - name: Publish release
+        uses: softprops/action-gh-release@v2.4.2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          target_commitish: master
+          prerelease: ${{ github.event.inputs.prerelease }}
+          generate_release_notes: true
+          files: |
+            build/esp-miner.bin
+            build/www.bin
+            esp-miner-${{ steps.tag.outputs.tag }}.tar.gz
