@@ -15,7 +15,7 @@ export interface ThemeSettings {
 export class ThemeService {
   private readonly mockSettings: ThemeSettings = {
     colorScheme: 'dark',
-    primaryColor: '#F80421'
+    primaryColor: '#6C5CE7'
   };
 
   static generateThemeVariables(primaryColor: string): { [key: string]: string } {

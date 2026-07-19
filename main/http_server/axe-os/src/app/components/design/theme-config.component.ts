@@ -19,6 +19,9 @@ export class ThemeConfigComponent implements OnInit {
   selectedScheme: string;
   currentColor: string = '';
   themes: ThemeOption[] = [
+    // === VECPOOL brand ===
+    { name: 'VecPool Violet', primaryColor: '#6C5CE7' },
+
     // === Reds & Oranges (energetic & warm) ===
     { name: 'Bright Red', primaryColor: '#F80421' },
     { name: 'Coral Red', primaryColor: '#FF5252' },

@@ -57,3 +57,29 @@
         }
     }
 }
+
+/* VECPOOL MINER wordmark (replaces the AxeOS logo) */
+.vecpool-wordmark {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 0.45rem;
+    line-height: 1;
+    padding: 0.15rem 0;
+}
+.vecpool-wordmark .vecpool-brand {
+    font-weight: 800;
+    font-size: 1.6rem;
+    letter-spacing: 0.02em;
+    background: linear-gradient(90deg, var(--primary-color, #6C5CE7), #A99BFF);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    color: transparent;
+}
+.vecpool-wordmark .vecpool-sub {
+    font-weight: 600;
+    font-size: 0.95rem;
+    letter-spacing: 0.22em;
+    color: var(--p-text-muted-color, rgba(255, 255, 255, 0.6));
+    align-self: center;
+}

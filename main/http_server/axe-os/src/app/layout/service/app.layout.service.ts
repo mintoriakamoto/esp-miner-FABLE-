@@ -96,18 +96,30 @@ export class LayoutService {
         this.themeService.getThemeSettings().subscribe(
             settings => {
                 if (settings) {
+                    // Migrate devices still on the old stock red accent to the
+                    // new VECPOOL default so the rebrand applies on upgrade, not
+                    // only on factory-fresh units. A user's own custom color is
+                    // left untouched.
+                    let primaryColor = settings.primaryColor;
+                    if (primaryColor && primaryColor.toUpperCase() === '#F80421') {
+                        primaryColor = '#6C5CE7';
+                        this.themeService.saveThemeSettings({
+                            colorScheme: settings.colorScheme,
+                            primaryColor
+                        }).subscribe();
+                    }
                     this._config = {
                         ...this._config,
                         colorScheme: settings.colorScheme,
                     };
                     // Apply accent colors dynamically
-                    const accentColors = ThemeService.generateThemeVariables(settings.primaryColor);
+                    const accentColors = ThemeService.generateThemeVariables(primaryColor);
                     Object.entries(accentColors).forEach(([key, value]) => {
                         document.documentElement.style.setProperty(key, value);
                     });
                 } else {
-                    // Save default red dark theme if no settings exist
-                    const defaultPrimary = '#F80421';
+                    // Save default VECPOOL dark theme if no settings exist
+                    const defaultPrimary = '#6C5CE7';
                     this.themeService.saveThemeSettings({
                         colorScheme: 'dark',
                         primaryColor: defaultPrimary
