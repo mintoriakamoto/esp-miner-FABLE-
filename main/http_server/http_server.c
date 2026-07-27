@@ -1277,12 +1277,15 @@ esp_err_t POST_WWW_update(httpd_req_t * req)
     const esp_partition_t * www_partition =
         esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_SPIFFS, "www");
     if (www_partition == NULL) {
+        GLOBAL_STATE->SYSTEM_MODULE.is_firmware_update = false;
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "WWW partition not found");
         return ESP_OK;
     }
 
-    // Don't attempt to write more than what can be stored in the partition
+    // Don't attempt to write more than what can be stored in the partition.
+    // Checked BEFORE erasing, so a too-large upload doesn't wipe the web UI.
     if (remaining > www_partition->size) {
+        GLOBAL_STATE->SYSTEM_MODULE.is_firmware_update = false;
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "File provided is too large for device");
         return ESP_OK;
     }
@@ -1291,7 +1294,13 @@ esp_err_t POST_WWW_update(httpd_req_t * req)
     size_t erase_size = 65536; // 64KB chunks
     for (size_t offset = 0; offset < www_partition->size; offset += erase_size) {
         size_t size_to_erase = MIN(erase_size, www_partition->size - offset);
-        ESP_ERROR_CHECK(esp_partition_erase_range(www_partition, offset, size_to_erase));
+        // Don't panic-reboot mid-erase (would corrupt the partition); report instead.
+        if (esp_partition_erase_range(www_partition, offset, size_to_erase) != ESP_OK) {
+            GLOBAL_STATE->SYSTEM_MODULE.is_firmware_update = false;
+            snprintf(GLOBAL_STATE->SYSTEM_MODULE.firmware_update_status, 20, "Erase Error");
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "WWW erase failed");
+            return ESP_OK;
+        }
         vTaskDelay(10 / portTICK_PERIOD_MS);
     }
 
@@ -1302,12 +1311,14 @@ esp_err_t POST_WWW_update(httpd_req_t * req)
         if (recv_len == HTTPD_SOCK_ERR_TIMEOUT) {
             continue;
         } else if (recv_len <= 0) {
+            GLOBAL_STATE->SYSTEM_MODULE.is_firmware_update = false;
             snprintf(GLOBAL_STATE->SYSTEM_MODULE.firmware_update_status, 20, "Protocol Error");
             httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Protocol Error");
             return ESP_OK;
         }
 
         if (esp_partition_write(www_partition, www_partition->size - remaining, (const void *) buf, recv_len) != ESP_OK) {
+            GLOBAL_STATE->SYSTEM_MODULE.is_firmware_update = false;
             snprintf(GLOBAL_STATE->SYSTEM_MODULE.firmware_update_status, 20, "Write Error");
             httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Write Error");
             return ESP_OK;
@@ -1360,7 +1371,14 @@ esp_err_t POST_OTA_update(httpd_req_t * req)
     int remaining = req->content_len;
 
     const esp_partition_t * ota_partition = esp_ota_get_next_update_partition(NULL);
-    ESP_ERROR_CHECK(esp_ota_begin(ota_partition, OTA_SIZE_UNKNOWN, &ota_handle));
+    // Don't ESP_ERROR_CHECK here: a recoverable failure (e.g. ESP_ERR_NO_MEM)
+    // would panic-reboot the device on a network-triggered request. Report it.
+    if (ota_partition == NULL || esp_ota_begin(ota_partition, OTA_SIZE_UNKNOWN, &ota_handle) != ESP_OK) {
+        GLOBAL_STATE->SYSTEM_MODULE.is_firmware_update = false;
+        snprintf(GLOBAL_STATE->SYSTEM_MODULE.firmware_update_status, 20, "Begin Error");
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OTA begin failed");
+        return ESP_OK;
+    }
 
     int chunks = 0;
     while (remaining > 0) {
@@ -1372,6 +1390,8 @@ esp_err_t POST_OTA_update(httpd_req_t * req)
 
             // Serious Error: Abort OTA
         } else if (recv_len <= 0) {
+            esp_ota_abort(ota_handle);
+            GLOBAL_STATE->SYSTEM_MODULE.is_firmware_update = false;
             snprintf(GLOBAL_STATE->SYSTEM_MODULE.firmware_update_status, 20, "Protocol Error");
             httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Protocol Error");
             return ESP_OK;
@@ -1380,6 +1400,7 @@ esp_err_t POST_OTA_update(httpd_req_t * req)
         // Successful Upload: Flash firmware chunk
         if (esp_ota_write(ota_handle, (const void *) buf, recv_len) != ESP_OK) {
             esp_ota_abort(ota_handle);
+            GLOBAL_STATE->SYSTEM_MODULE.is_firmware_update = false;
             snprintf(GLOBAL_STATE->SYSTEM_MODULE.firmware_update_status, 20, "Write Error");
             httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Write Error");
             return ESP_OK;
@@ -1399,6 +1420,7 @@ esp_err_t POST_OTA_update(httpd_req_t * req)
 
     // Validate and switch to new OTA image and reboot
     if (esp_ota_end(ota_handle) != ESP_OK || esp_ota_set_boot_partition(ota_partition) != ESP_OK) {
+        GLOBAL_STATE->SYSTEM_MODULE.is_firmware_update = false;
         snprintf(GLOBAL_STATE->SYSTEM_MODULE.firmware_update_status, 20, "Validation Error");
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Validation / Activation Error");
         return ESP_OK;

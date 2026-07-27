@@ -314,11 +314,18 @@ static float ulinear16_2_float(uint16_t value)
 */
 static uint16_t float_2_ulinear16(float value)
 {
-    uint8_t voutmode;
+    uint8_t voutmode = 0;
     float exponent;
     uint16_t result;
 
-    smb_read_byte(PMBUS_VOUT_MODE, &voutmode);
+    // If the mode read fails, voutmode would be garbage and we'd encode the
+    // VOUT_COMMAND against an unknown exponent — which can command an
+    // over-voltage. Fail safe by returning 0 (minimum) so a bad read can only
+    // ever under-volt, never over-volt the ASIC.
+    if (smb_read_byte(PMBUS_VOUT_MODE, &voutmode) != ESP_OK) {
+        ESP_LOGE(TAG, "VOUT_MODE read failed; refusing to encode voltage");
+        return 0;
+    }
     if (voutmode & 0x10) {
         // exponent is negative
         exponent = -1 * ((~voutmode & 0x1F) + 1);

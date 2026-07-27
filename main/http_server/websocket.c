@@ -13,6 +13,10 @@
 
 #define WS_LOG_SCRATCH_SIZE 2048
 
+// Upper bound on an inbound WebSocket frame payload. The dashboard only sends
+// tiny control/subscription frames, so anything larger is malformed or hostile.
+#define WS_MAX_INBOUND_PAYLOAD 4096
+
 static const char * TAG = "websocket";
 
 typedef struct {
@@ -176,7 +180,14 @@ esp_err_t websocket_handler(httpd_req_t *req)
         return ret;
     }
 
-    // If there's a payload, drain it
+    // If there's a payload, drain it. ws_pkt.len is client-controlled: cap it
+    // before allocating so a frame declaring a huge length can't exhaust the
+    // heap, and can't wrap `len + 1` to 0 on this 32-bit target (which would
+    // hand httpd_ws_recv_frame a ~0-byte buffer with a 4GB max_len -> overflow).
+    if (ws_pkt.len > WS_MAX_INBOUND_PAYLOAD) {
+        ESP_LOGW(TAG, "Rejecting oversized WS frame: %u bytes", (unsigned)ws_pkt.len);
+        return ESP_FAIL;
+    }
     if (ws_pkt.len > 0) {
         uint8_t *buf = (uint8_t *)calloc(1, ws_pkt.len + 1);
         if (buf) {

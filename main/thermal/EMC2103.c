@@ -97,6 +97,11 @@ uint16_t EMC2103_get_fan_speed(void)
     reading = tach_lsb | (tach_msb << 8);
     reading >>= 3;
 
+    if (reading == 0) {
+        // Guard against divide-by-zero from a glitched/partial tach read.
+        return 0;
+    }
+
     //RPM = (3,932,160 * m)/reading
     //m is the multipler, which is default 2
     RPM = 7864320 / reading;
@@ -131,6 +136,11 @@ static float get_external_temp(int i, uint8_t msb_register, uint8_t lsb_register
 
     if (reading == EMC2103_TEMP_DIODE_FAULT) {
         ESP_LOGE(TAG, "EMC2103 TEMP_DIODE%d_FAULT: %04X", i, reading);
+        // Fail safe: a faulted diode means the ASIC temperature is unknown.
+        // Falling through would compute -128C and read as "cool", defeating
+        // overheat protection. Return a value above the throttle threshold so
+        // the power task shuts the ASIC down instead of mining blind.
+        return 200.0f;
     }
 
     reading >>= 5;  // Now, `reading` contains an 11-bit signed value
